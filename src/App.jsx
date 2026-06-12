@@ -262,8 +262,12 @@ function WorkerApp({ onBack, siteId, sites }) {
       .ilike("name", `%${nameInput.trim()}%`)
       .limit(1);
     setBusy(false);
-    if (qErr || !data || !data.length) {
-      setError("Name + PIN not recognized. Try Marcus Johnson / 1234 for demo, or create an account.");
+    if (qErr) {
+      setError("DEBUG error: " + JSON.stringify(qErr));
+      return;
+    }
+    if (!data || !data.length) {
+      setError(`DEBUG: no match for name="${nameInput}" pin="${pinInput}". Try Marcus Johnson / 1234, or create an account.`);
       return;
     }
     const found = data[0];
