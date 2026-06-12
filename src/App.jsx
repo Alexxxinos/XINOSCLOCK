@@ -84,33 +84,22 @@ const Icon = ({ name, size = 16, style }) => {
   );
 };
 
-// ---------- QR CODE (lightweight visual placeholder generator) ----------
-// Generates a deterministic pseudo-QR pattern from a string so each
-// site code produces a unique, stable-looking code without a dependency.
+// ---------- QR CODE (real, scannable) ----------
 function QRCode({ value, size = 180 }) {
-  const cells = 21;
-  const cell = size / cells;
-  let seed = 0;
-  for (let i = 0; i < value.length; i++) seed = (seed * 31 + value.charCodeAt(i)) >>> 0;
-  const rand = () => {
-    seed = (seed * 1103515245 + 12345) >>> 0;
-    return (seed >>> 8) / 16777216;
-  };
-  const grid = [];
-  for (let y = 0; y < cells; y++) {
-    for (let x = 0; x < cells; x++) {
-      const isFinder =
-        (x < 3 && y < 3) || (x > cells - 4 && y < 3) || (x < 3 && y > cells - 4);
-      grid.push({ x, y, on: isFinder ? true : rand() > 0.55 });
-    }
-  }
-  return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ background: "#fff", borderRadius: 8 }}>
-      {grid.map(({ x, y, on }, i) =>
-        on ? <rect key={i} x={x * cell} y={y * cell} width={cell} height={cell} fill="#1a1a1a" /> : null
-      )}
-    </svg>
-  );
+  const canvasRef = useRef(null);
+  useEffect(() => {
+    let cancelled = false;
+    import("qrcode").then((QRCodeLib) => {
+      if (cancelled || !canvasRef.current) return;
+      QRCodeLib.toCanvas(canvasRef.current, value, {
+        width: size,
+        margin: 1,
+        color: { dark: "#1a1a1a", light: "#ffffff" },
+      });
+    });
+    return () => { cancelled = true; };
+  }, [value, size]);
+  return <canvas ref={canvasRef} width={size} height={size} style={{ background: "#fff", borderRadius: 8 }} />;
 }
 
 // ============================================================
