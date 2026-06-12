@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { supabase } from "./supabaseClient";
 
 /* ============================================================
    JOBSITE TIME TRACKER
@@ -6,29 +7,20 @@ import React, { useState, useEffect, useRef } from "react";
    - Supervisor dashboard (live roster, hours, flags, GPS)
    - QR code generator per jobsite
    - Geofence: flags if worker leaves >2000ft without clocking out
-   ============================================================ */
 
-// ---------- MOCK DATA LAYER ----------
-// In production this all lives in Supabase (Postgres + Realtime + Auth).
-// Tables: sites, workers, punch_events
-// This mock layer mimics that shape so swapping to Supabase is mostly
-// a matter of replacing these functions with supabase-js calls.
+   Data is stored in Supabase:
+   - sites: jobsite id, name, code, lat/lng, foreman
+   - workers: id, name, company, pin, initials, color, bg
+   - punch_events: worker_id, site_id, type (clock_in/clock_out),
+     timestamp, lat/lng, gps_accuracy, flagged, flag_reason
+   ============================================================ */
 
 const FT_PER_METER = 3.28084;
 const GEOFENCE_RADIUS_FT = 2000;
 
-const SITES = [
-  { id: "site_4", name: "Riverside Ave", code: "Site #4", lat: 41.0262, lng: -73.5783, foreman: "Dave Keller" },
-  { id: "site_7", name: "Harbor Point", code: "Site #7", lat: 41.0345, lng: -73.6280, foreman: "Lena Brooks" },
-];
+// Fallback site used only if the sites table hasn't loaded yet
+const FALLBACK_SITE = { id: "site_4", name: "Riverside Ave", code: "Site #4", lat: 41.0262, lng: -73.5783, foreman: "Dave Keller" };
 
-const seedWorkers = [
-  { id: "w1", name: "Marcus Johnson", company: "Xinos Construction", pin: "1234", initials: "MJ", color: "#0C447C", bg: "#E6F1FB" },
-  { id: "w2", name: "Sofia Reyes", company: "Xinos Construction", pin: "1234", initials: "SR", color: "#085041", bg: "#E1F5EE" },
-  { id: "w3", name: "Tyler Walsh", company: "Xinos Construction", pin: "1234", initials: "TW", color: "#633806", bg: "#FAEEDA" },
-  { id: "w4", name: "Darnell Nixon", company: "Xinos Construction", pin: "1234", initials: "DN", color: "#3C3489", bg: "#EEEDFE" },
-  { id: "w5", name: "Priya Lamon", company: "Xinos Construction", pin: "1234", initials: "PL", color: "#444441", bg: "#F1EFE8" },
-];
 
 // distance in feet between two lat/lng points (haversine)
 function distFeet(lat1, lng1, lat2, lng2) {
@@ -40,14 +32,6 @@ function distFeet(lat1, lng1, lat2, lng2) {
     Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
   const meters = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return meters * FT_PER_METER;
-}
-
-// jitter a coordinate slightly (for demo realism)
-function jitter(lat, lng, maxFt = 150) {
-  const meters = maxFt / FT_PER_METER;
-  const dLat = (Math.random() - 0.5) * (meters / 111320) * 2;
-  const dLng = (Math.random() - 0.5) * (meters / (111320 * Math.cos((lat * Math.PI) / 180))) * 2;
-  return { lat: lat + dLat, lng: lng + dLng };
 }
 
 function fmtTime(d) {
@@ -113,7 +97,14 @@ export default function App() {
   const initialView = initialSiteId ? "worker" : "home";
 
   const [view, setView] = useState(initialView); // home | worker | supervisor
-  const [siteId, setSiteId] = useState(initialSiteId || SITES[0].id);
+  const [siteId, setSiteId] = useState(initialSiteId || FALLBACK_SITE.id);
+  const [sites, setSites] = useState([FALLBACK_SITE]);
+
+  useEffect(() => {
+    supabase.from("sites").select("*").then(({ data, error }) => {
+      if (!error && data && data.length) setSites(data);
+    });
+  }, []);
 
   function goHome() {
     setView("home");
@@ -123,8 +114,8 @@ export default function App() {
   return (
     <div style={{ fontFamily: "'Inter','Helvetica Neue',Arial,sans-serif", minHeight: "100%", background: "#F6F5F2", color: "#1A1A1A" }}>
       {view === "home" && <HomeScreen onSelect={setView} />}
-      {view === "worker" && <WorkerApp onBack={goHome} siteId={siteId} />}
-      {view === "supervisor" && <SupervisorApp onBack={goHome} />}
+      {view === "worker" && <WorkerApp onBack={goHome} siteId={siteId} sites={sites} />}
+      {view === "supervisor" && <SupervisorApp onBack={goHome} sites={sites} setSites={setSites} />}
     </div>
   );
 }
@@ -175,18 +166,21 @@ const cardBtn = {
 // ============================================================
 // WORKER APP (mobile punch flow)
 // ============================================================
-function WorkerApp({ onBack, siteId }) {
-  const site = SITES.find((s) => s.id === siteId) || SITES[0];
-  const [stage, setStage] = useState("scan"); // scan | login | signup | sign_in | checked_in | clockedin | sign_out | done
+function WorkerApp({ onBack, siteId, sites }) {
+  const site = sites.find((s) => s.id === siteId) || sites[0] || FALLBACK_SITE;
+  const [stage, setStage] = useState("loading"); // loading | scan | signup | sign_in | checked_in | clockedin | sign_out | done
   const [worker, setWorker] = useState(null);
   const [pinInput, setPinInput] = useState("");
+  const [nameInput, setNameInput] = useState("");
   const [error, setError] = useState("");
   const [signupForm, setSignupForm] = useState({ name: "", company: "", phone: "", pin: "" });
   const [gps, setGps] = useState(null);
   const [gpsStatus, setGpsStatus] = useState("locating"); // locating | locked | denied
   const [clockInTime, setClockInTime] = useState(null);
+  const [openPunchId, setOpenPunchId] = useState(null);
   const [now, setNow] = useState(Date.now());
   const [geoFlag, setGeoFlag] = useState(null);
+  const [busy, setBusy] = useState(false);
 
   // GPS acquisition
   useEffect(() => {
@@ -201,7 +195,35 @@ function WorkerApp({ onBack, siteId }) {
     );
   }, []);
 
-  // live clock + geofence watch while on site (signed in through clocked-in)
+  // Once we know who the worker is, check whether they already have
+  // an open (un-clocked-out) punch for this site — if so, skip
+  // straight to the clocked-in view instead of asking to clock in again.
+  async function checkOpenPunch(w) {
+    const { data } = await supabase
+      .from("punch_events")
+      .select("*")
+      .eq("worker_id", w.id)
+      .eq("site_id", site.id)
+      .order("timestamp", { ascending: false })
+      .limit(1);
+
+    const last = data && data[0];
+    if (last && last.type === "clock_in") {
+      setClockInTime(new Date(last.timestamp).getTime());
+      setOpenPunchId(last.id);
+      setStage("clockedin");
+    } else {
+      setStage("scan");
+    }
+  }
+
+  useEffect(() => {
+    setStage("loading");
+    // On first load, no worker is identified yet — show the PIN screen.
+    setStage("scan");
+  }, [site.id]);
+
+  // live clock + geofence watch while on site
   const onSiteStages = ["sign_in", "checked_in", "clockedin"];
   useEffect(() => {
     if (!onSiteStages.includes(stage)) return;
@@ -212,37 +234,102 @@ function WorkerApp({ onBack, siteId }) {
         (pos) => {
           const d = distFeet(site.lat, site.lng, pos.coords.latitude, pos.coords.longitude);
           setGeoFlag(d > GEOFENCE_RADIUS_FT ? Math.round(d) : null);
+          // If we're already clocked in and drift outside the geofence,
+          // write a flag onto the open punch event so the supervisor
+          // dashboard can surface it.
+          if (d > GEOFENCE_RADIUS_FT && openPunchId) {
+            supabase.from("punch_events").update({
+              flagged: true,
+              flag_reason: `${Math.round(d)} ft from jobsite`,
+            }).eq("id", openPunchId);
+          }
         },
         () => {},
         { enableHighAccuracy: true }
       );
     }
     return () => { clearInterval(t); if (watchId) navigator.geolocation.clearWatch(watchId); };
-  }, [stage, site]);
+  }, [stage, site, openPunchId]);
 
-  function tryLogin() {
-    const found = seedWorkers.find((w) => w.pin === pinInput);
-    if (found) { setWorker(found); setError(""); doClockIn(found); }
-    else setError("PIN not recognized. Try 1234 for demo, or create an account.");
+  async function tryLogin() {
+    setBusy(true);
+    setError("");
+    const { data, error: qErr } = await supabase
+      .from("workers")
+      .select("*")
+      .eq("pin", pinInput)
+      .ilike("name", nameInput.trim())
+      .limit(1);
+    setBusy(false);
+    if (qErr || !data || !data.length) {
+      setError("Name + PIN not recognized. Try Marcus Johnson / 1234 for demo, or create an account.");
+      return;
+    }
+    const found = data[0];
+    setWorker(found);
+    checkOpenPunch(found);
   }
 
-  function doClockIn(w) {
-    setClockInTime(Date.now());
+  // GPS coordinates to attach to a punch, with geofence flag check
+  function currentGpsPayload() {
+    if (!gps) return { lat: null, lng: null, gps_accuracy: null, flagged: false, flag_reason: null };
+    const d = distFeet(site.lat, site.lng, gps.lat, gps.lng);
+    const flagged = d > GEOFENCE_RADIUS_FT;
+    return {
+      lat: gps.lat, lng: gps.lng, gps_accuracy: gps.accuracy,
+      flagged, flag_reason: flagged ? `Clocked in ${Math.round(d)} ft from jobsite` : null,
+    };
+  }
+
+  async function doClockIn(w) {
+    setBusy(true);
+    const payload = currentGpsPayload();
+    const { data, error: insErr } = await supabase
+      .from("punch_events")
+      .insert({ worker_id: w.id, site_id: site.id, type: "clock_in", ...payload })
+      .select()
+      .single();
+    setBusy(false);
+    if (insErr) { setError("Couldn't save your clock-in. Try again."); return; }
+    setClockInTime(new Date(data.timestamp).getTime());
+    setOpenPunchId(data.id);
     setStage("sign_in");
   }
 
-  function submitSignup() {
+  async function doClockOut() {
+    setBusy(true);
+    const payload = currentGpsPayload();
+    await supabase.from("punch_events").insert({
+      worker_id: worker.id, site_id: site.id, type: "clock_out", ...payload,
+    });
+    setBusy(false);
+    setStage("done");
+  }
+
+  async function submitSignup() {
     if (!signupForm.name || !signupForm.pin) { setError("Name and PIN are required."); return; }
-    const newWorker = {
-      id: "new_" + Date.now(),
-      name: signupForm.name,
-      company: signupForm.company || "—",
-      pin: signupForm.pin,
-      initials: signupForm.name.split(" ").map((s) => s[0]).join("").slice(0, 2).toUpperCase(),
-      color: "#0C447C", bg: "#E6F1FB",
-    };
-    setWorker(newWorker);
-    doClockIn(newWorker);
+    setBusy(true);
+    setError("");
+    const initials = signupForm.name.split(" ").map((s) => s[0]).join("").slice(0, 2).toUpperCase();
+    const { data, error: insErr } = await supabase
+      .from("workers")
+      .insert({
+        name: signupForm.name,
+        company: signupForm.company || null,
+        pin: signupForm.pin,
+        initials,
+        color: "#0C447C",
+        bg: "#E6F1FB",
+      })
+      .select()
+      .single();
+    setBusy(false);
+    if (insErr) {
+      setError("Couldn't create your account. Try again.");
+      return;
+    }
+    setWorker(data);
+    doClockIn(data);
   }
 
   const elapsed = clockInTime ? now - clockInTime : 0;
@@ -253,6 +340,12 @@ function WorkerApp({ onBack, siteId }) {
         <div style={phoneStyle}>
           <div style={statusBar}><span>9:41</span><span>LTE</span></div>
 
+          {stage === "loading" && (
+            <div style={{ ...screenPad, textAlign: "center", paddingTop: 60 }}>
+              <p style={{ fontSize: 12, color: "#9A9893" }}>Loading...</p>
+            </div>
+          )}
+
           {stage === "scan" && (
             <div style={screenPad}>
               <div style={{ textAlign: "center", marginBottom: 16 }}>
@@ -262,16 +355,22 @@ function WorkerApp({ onBack, siteId }) {
                 <Icon name="qr" size={64} style={{ color: "#1D9E75" }} />
                 <p style={{ fontSize: 13, color: "#6B6A66", marginTop: 8 }}>QR code scanned</p>
               </div>
-              <p style={{ fontSize: 13, fontWeight: 600, textAlign: "center", margin: "0 0 4px" }}>Enter your PIN</p>
-              <p style={{ fontSize: 11, color: "#9A9893", textAlign: "center", margin: "0 0 14px" }}>Demo PIN: 1234</p>
+              <p style={{ fontSize: 13, fontWeight: 600, textAlign: "center", margin: "0 0 4px" }}>Sign in</p>
+              <p style={{ fontSize: 11, color: "#9A9893", textAlign: "center", margin: "0 0 14px" }}>Demo: Marcus Johnson / 1234</p>
+              <input
+                value={nameInput}
+                onChange={(e) => setNameInput(e.target.value)}
+                type="text" placeholder="Full name"
+                style={{ ...inputStyle, marginBottom: 8 }}
+              />
               <input
                 value={pinInput}
                 onChange={(e) => setPinInput(e.target.value.replace(/\D/g, "").slice(0, 4))}
-                type="password" inputMode="numeric" placeholder="••••"
+                type="password" inputMode="numeric" placeholder="PIN"
                 style={{ ...inputStyle, textAlign: "center", fontSize: 22, letterSpacing: 6, marginBottom: 10 }}
               />
               {error && <p style={{ fontSize: 11, color: "#A32D2D", margin: "0 0 10px" }}>{error}</p>}
-              <button onClick={tryLogin} style={submitBtn}>Continue</button>
+              <button onClick={tryLogin} disabled={busy} style={submitBtn}>{busy ? "Checking..." : "Continue"}</button>
               <button onClick={() => { setStage("signup"); setError(""); }} style={ghostBtn}>
                 First time here? Create account
               </button>
@@ -294,7 +393,7 @@ function WorkerApp({ onBack, siteId }) {
                 maxLength={4} value={signupForm.pin}
                 onChange={(e) => setSignupForm({ ...signupForm, pin: e.target.value.replace(/\D/g, "").slice(0, 4) })} />
               {error && <p style={{ fontSize: 11, color: "#A32D2D", margin: "0 0 8px" }}>{error}</p>}
-              <button onClick={submitSignup} style={submitBtn}>Create &amp; clock in</button>
+              <button onClick={submitSignup} disabled={busy} style={submitBtn}>{busy ? "Creating..." : "Create & clock in"}</button>
               <button onClick={() => setStage("scan")} style={ghostBtn}>Back</button>
             </div>
           )}
@@ -359,7 +458,7 @@ function WorkerApp({ onBack, siteId }) {
               <Row label="Clocked in" value={fmtTime(new Date(clockInTime))} />
               <Row label="Total hours" value={fmtHrs(elapsed) + " hrs"} bold />
               <SignaturePad />
-              <button onClick={() => setStage("done")} style={submitBtn}>Submit &amp; clock out</button>
+              <button onClick={doClockOut} disabled={busy} style={submitBtn}>{busy ? "Saving..." : "Submit & clock out"}</button>
             </div>
           )}
 
@@ -370,7 +469,7 @@ function WorkerApp({ onBack, siteId }) {
               </div>
               <p style={{ fontSize: 14, fontWeight: 600, margin: "0 0 4px" }}>Thank you, you're checked out</p>
               <p style={{ fontSize: 12, color: "#9A9893", margin: 0 }}>Total: {fmtHrs(elapsed)} hrs · See you tomorrow</p>
-              <button onClick={() => { setStage("scan"); setWorker(null); setClockInTime(null); setPinInput(""); }} style={{ ...ghostBtn, marginTop: 20 }}>Done</button>
+              <button onClick={() => { setStage("scan"); setWorker(null); setClockInTime(null); setOpenPunchId(null); setPinInput(""); setGeoFlag(null); }} style={{ ...ghostBtn, marginTop: 20 }}>Done</button>
             </div>
           )}
         </div>
@@ -442,7 +541,7 @@ function SignaturePad() {
 // ============================================================
 const ADMIN_PASSWORD = "sitemanager"; // demo only — replace with Supabase auth
 
-function SupervisorApp({ onBack }) {
+function SupervisorApp({ onBack, sites, setSites }) {
   const [authed, setAuthed] = useState(false);
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
@@ -476,7 +575,7 @@ function SupervisorApp({ onBack }) {
           <TabBtn active={tab === "dashboard"} onClick={() => setTab("dashboard")}>Live dashboard</TabBtn>
           <TabBtn active={tab === "qr"} onClick={() => setTab("qr")}>Jobsite QR codes</TabBtn>
         </div>
-        {tab === "dashboard" ? <Dashboard /> : <QRSection />}
+        {tab === "dashboard" ? <Dashboard sites={sites} /> : <QRSection sites={sites} setSites={setSites} />}
       </div>
     </Shell>
   );
@@ -495,48 +594,119 @@ function TabBtn({ active, children, onClick }) {
 }
 
 // ---------- LIVE DASHBOARD ----------
-function Dashboard() {
-  const site = SITES[0];
-  const [roster, setRoster] = useState(() =>
-    seedWorkers.map((w, i) => {
-      const clockIn = new Date();
-      clockIn.setHours(7, 45 + i * 4, 0, 0);
-      const clockedOut = i >= 3; // last two are clocked out (matches earlier mockup)
-      const out = clockedOut ? new Date(clockIn.getTime() + 9.3 * 3600000) : null;
-      const { lat, lng } = jitter(site.lat, site.lng, i === 2 ? 2400 : 150); // Tyler (i=2) is off-site
-      return {
-        ...w,
-        clockIn,
-        clockOut: out,
-        status: clockedOut ? "out" : "in",
-        lat, lng,
-        flag: i === 2 ? "gps_in" : null,
-      };
-    })
-  );
+function Dashboard({ sites }) {
+  const site = sites[0] || FALLBACK_SITE;
+  const [roster, setRoster] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [tick, setTick] = useState(Date.now());
 
+  // Build roster: for each worker, pair today's clock_in/clock_out events
+  // into shifts. A worker can have multiple shifts in a day if they left
+  // and came back; we show the most recent shift as their current status.
+  async function loadRoster() {
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+
+    const { data: events, error } = await supabase
+      .from("punch_events")
+      .select("*, workers(*)")
+      .eq("site_id", site.id)
+      .gte("timestamp", startOfDay.toISOString())
+      .order("timestamp", { ascending: true });
+
+    if (error || !events) { setLoading(false); return; }
+
+    // group by worker
+    const byWorker = {};
+    for (const ev of events) {
+      if (!ev.workers) continue;
+      const wid = ev.worker_id;
+      if (!byWorker[wid]) byWorker[wid] = { worker: ev.workers, events: [] };
+      byWorker[wid].events.push(ev);
+    }
+
+    const rows = Object.values(byWorker).map(({ worker, events }) => {
+      // pair clock_in/clock_out sequentially to compute total ms worked today
+      let totalMs = 0;
+      let openClockIn = null;
+      let lastClockIn = null;
+      let lastClockOut = null;
+      let activeFlag = null;
+      let activeFlagLoc = null;
+
+      for (const ev of events) {
+        const t = new Date(ev.timestamp).getTime();
+        if (ev.type === "clock_in") {
+          openClockIn = ev;
+          lastClockIn = ev;
+          if (ev.flagged) { activeFlag = "gps_in"; activeFlagLoc = ev; }
+        } else if (ev.type === "clock_out" && openClockIn) {
+          totalMs += t - new Date(openClockIn.timestamp).getTime();
+          openClockIn = null;
+          lastClockOut = ev;
+        }
+      }
+
+      const stillOpen = !!openClockIn;
+      if (stillOpen) {
+        totalMs += tick - new Date(openClockIn.timestamp).getTime();
+        // check the latest punch event for a live geofence flag
+        const latest = events[events.length - 1];
+        if (latest.flagged && latest.type === "clock_in") {
+          activeFlag = "geofence";
+          activeFlagLoc = latest;
+        }
+      }
+
+      return {
+        id: worker.id,
+        name: worker.name,
+        company: worker.company,
+        initials: worker.initials,
+        color: worker.color,
+        bg: worker.bg,
+        status: stillOpen ? "in" : "out",
+        clockIn: lastClockIn ? new Date(lastClockIn.timestamp) : null,
+        clockOut: lastClockOut ? new Date(lastClockOut.timestamp) : null,
+        totalMs,
+        flag: activeFlag,
+        flagLoc: activeFlagLoc,
+      };
+    });
+
+    // sort: on site first, then by clock-in time
+    rows.sort((a, b) => {
+      if (a.status !== b.status) return a.status === "in" ? -1 : 1;
+      return (a.clockIn?.getTime() || 0) - (b.clockIn?.getTime() || 0);
+    });
+
+    setRoster(rows);
+    setLoading(false);
+  }
+
   useEffect(() => {
+    loadRoster();
     const t = setInterval(() => setTick(Date.now()), 5000);
     return () => clearInterval(t);
-  }, []);
+  }, [site.id]);
 
-  // recompute geofence flags live
   useEffect(() => {
-    setRoster((prev) =>
-      prev.map((w) => {
-        if (w.status !== "in") return w;
-        const d = distFeet(site.lat, site.lng, w.lat, w.lng);
-        return { ...w, distFt: Math.round(d), flag: d > GEOFENCE_RADIUS_FT ? "geofence" : null };
+    loadRoster();
+  }, [tick]);
+
+  // realtime: refresh roster whenever a punch event changes for this site
+  useEffect(() => {
+    const channel = supabase
+      .channel("punch_events_" + site.id)
+      .on("postgres_changes", { event: "*", schema: "public", table: "punch_events", filter: `site_id=eq.${site.id}` }, () => {
+        loadRoster();
       })
-    );
-  }, [tick, site]);
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [site.id]);
 
   const onSite = roster.filter((w) => w.status === "in").length;
-  const totalHoursToday = roster.reduce((sum, w) => {
-    const end = w.clockOut ? w.clockOut.getTime() : tick;
-    return sum + (end - w.clockIn.getTime());
-  }, 0);
+  const totalHoursToday = roster.reduce((sum, w) => sum + w.totalMs, 0);
   const flagged = roster.filter((w) => w.flag);
 
   return (
@@ -569,40 +739,40 @@ function Dashboard() {
         <div style={{ ...rosterRow, ...rowHeader }}>
           <div></div><div>Worker</div><div>Status</div><div>Clock in</div><div>Clock out</div><div>Hours today</div><div>Flag</div>
         </div>
-        {roster.map((w) => {
-          const end = w.clockOut ? w.clockOut.getTime() : tick;
-          const hrs = fmtHrs(end - w.clockIn.getTime());
-          return (
-            <div key={w.id} style={rosterRow}>
-              <div style={{ width: 32, height: 32, borderRadius: "50%", background: w.bg, color: w.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700 }}>{w.initials}</div>
-              <div>
-                <p style={{ fontSize: 13, fontWeight: 500, margin: 0 }}>{w.name}</p>
-                <p style={{ fontSize: 11, color: "#9A9893", margin: 0 }}>{w.company}</p>
-              </div>
-              <div>
-                <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 12, background: w.status === "in" ? "#EAF3DE" : "#F1EFE8", color: w.status === "in" ? "#27500A" : "#6B6A66" }}>
-                  {w.status === "in" ? "On site" : "Clocked out"}
-                </span>
-              </div>
-              <div style={{ fontSize: 13 }}>{fmtTime(w.clockIn)}</div>
-              <div style={{ fontSize: 13, color: w.clockOut ? "#1A1A1A" : "#B5B3AD" }}>{w.clockOut ? fmtTime(w.clockOut) : "—"}</div>
-              <div style={{ fontSize: 13 }}>{hrs} hrs</div>
-              <div>
-                {w.flag === "geofence" && (
-                  <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 12, background: "#FCEBEB", color: "#791F1F", display: "inline-flex", alignItems: "center", gap: 4 }}>
-                    <Icon name="pinOff" size={11} />{w.distFt?.toLocaleString()} ft away
-                  </span>
-                )}
-                {w.flag === "gps_in" && (
-                  <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 12, background: "#FCEBEB", color: "#791F1F", display: "inline-flex", alignItems: "center", gap: 4 }}>
-                    <Icon name="pinOff" size={11} />Off-site GPS
-                  </span>
-                )}
-                {!w.flag && <span style={{ fontSize: 12, color: "#D8D6CF" }}>—</span>}
-              </div>
+        {loading && <div style={{ padding: "14px 16px", fontSize: 12, color: "#9A9893" }}>Loading roster...</div>}
+        {!loading && roster.length === 0 && (
+          <div style={{ padding: "14px 16px", fontSize: 12, color: "#9A9893" }}>No punches yet today.</div>
+        )}
+        {roster.map((w) => (
+          <div key={w.id} style={rosterRow}>
+            <div style={{ width: 32, height: 32, borderRadius: "50%", background: w.bg, color: w.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700 }}>{w.initials}</div>
+            <div>
+              <p style={{ fontSize: 13, fontWeight: 500, margin: 0 }}>{w.name}</p>
+              <p style={{ fontSize: 11, color: "#9A9893", margin: 0 }}>{w.company || "—"}</p>
             </div>
-          );
-        })}
+            <div>
+              <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 12, background: w.status === "in" ? "#EAF3DE" : "#F1EFE8", color: w.status === "in" ? "#27500A" : "#6B6A66" }}>
+                {w.status === "in" ? "On site" : "Clocked out"}
+              </span>
+            </div>
+            <div style={{ fontSize: 13 }}>{w.clockIn ? fmtTime(w.clockIn) : "—"}</div>
+            <div style={{ fontSize: 13, color: w.clockOut ? "#1A1A1A" : "#B5B3AD" }}>{w.clockOut ? fmtTime(w.clockOut) : "—"}</div>
+            <div style={{ fontSize: 13 }}>{fmtHrs(w.totalMs)} hrs</div>
+            <div>
+              {w.flag === "geofence" && (
+                <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 12, background: "#FCEBEB", color: "#791F1F", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  <Icon name="pinOff" size={11} />{w.flagLoc?.flag_reason || "Off jobsite"}
+                </span>
+              )}
+              {w.flag === "gps_in" && (
+                <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 12, background: "#FCEBEB", color: "#791F1F", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  <Icon name="pinOff" size={11} />Off-site GPS
+                </span>
+              )}
+              {!w.flag && <span style={{ fontSize: 12, color: "#D8D6CF" }}>—</span>}
+            </div>
+          </div>
+        ))}
       </div>
 
       <SectionHead>Flags &amp; alerts</SectionHead>
@@ -615,34 +785,31 @@ function Dashboard() {
             </div>
             <div>
               <p style={{ fontSize: 12, margin: "0 0 2px" }}>
-                {w.name} —{" "}
-                {w.flag === "geofence"
-                  ? `currently ${w.distFt?.toLocaleString()} ft from jobsite (limit ${GEOFENCE_RADIUS_FT.toLocaleString()} ft) without clocking out`
-                  : "GPS punched from off-site location"}
+                {w.name} — {w.flagLoc?.flag_reason || "flagged location"}
               </p>
               <p style={{ fontSize: 11, color: "#9A9893", margin: 0 }}>
-                Clock in at {fmtTime(w.clockIn)} · {w.lat.toFixed(4)}, {w.lng.toFixed(4)}
+                Clock in at {w.clockIn ? fmtTime(w.clockIn) : "—"}
+                {w.flagLoc?.lat ? ` · ${w.flagLoc.lat.toFixed(4)}, ${w.flagLoc.lng.toFixed(4)}` : ""}
               </p>
             </div>
           </div>
         ))}
       </div>
 
-      <SectionHead>Hours summary (this week)</SectionHead>
+      <SectionHead>Hours summary (today)</SectionHead>
       <div style={card}>
         <div style={{ ...hoursRow, ...rowHeader }}>
           <div>Worker</div><div>Today</div><div>This week</div><div>Progress</div>
         </div>
-        {roster.map((w, i) => {
-          const end = w.clockOut ? w.clockOut.getTime() : tick;
-          const today = (end - w.clockIn.getTime()) / 3600000;
-          const week = today + [29, 27.5, 25.5, 29.5, 28.5][i % 5];
-          const pct = Math.min(100, Math.round((week / 40) * 100));
+        {roster.length === 0 && <div style={{ padding: "14px 16px", fontSize: 12, color: "#9A9893" }}>No data yet.</div>}
+        {roster.map((w) => {
+          const today = w.totalMs / 3600000;
+          const pct = Math.min(100, Math.round((today / 8) * 100));
           return (
             <div key={w.id} style={hoursRow}>
               <div style={{ fontSize: 13 }}>{w.name}</div>
               <div style={{ fontSize: 13 }}>{today.toFixed(1)} hrs</div>
-              <div style={{ fontSize: 13 }}>{week.toFixed(1)} hrs</div>
+              <div style={{ fontSize: 13, color: "#9A9893" }}>—</div>
               <div>
                 <div style={{ width: 60, height: 5, borderRadius: 3, background: "#F1EFE8", display: "inline-block" }}>
                   <div style={{ width: pct + "%", height: 5, borderRadius: 3, background: "#1D9E75" }} />
@@ -669,15 +836,26 @@ function SectionHead({ children }) {
 }
 
 // ---------- QR SECTION ----------
-function QRSection() {
-  const [sites, setSites] = useState(SITES);
+function QRSection({ sites, setSites }) {
   const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
 
-  function addSite() {
+  async function addSite() {
     if (!name.trim()) return;
-    const id = "site_" + (sites.length + 1);
-    setSites([...sites, { id, name: name.trim(), code: `Site #${sites.length + 1}`, lat: 41.03 + Math.random() * 0.02, lng: -73.6 + Math.random() * 0.02, foreman: "—" }]);
-    setName("");
+    setBusy(true);
+    const id = "site_" + Date.now();
+    const newSite = {
+      id, name: name.trim(), code: `Site #${sites.length + 1}`,
+      lat: 41.03 + (Math.random() - 0.5) * 0.04,
+      lng: -73.6 + (Math.random() - 0.5) * 0.04,
+      foreman: null,
+    };
+    const { error } = await supabase.from("sites").insert(newSite);
+    setBusy(false);
+    if (!error) {
+      setSites([...sites, newSite]);
+      setName("");
+    }
   }
 
   return (
@@ -686,7 +864,7 @@ function QRSection() {
       <div style={{ ...card, padding: "14px 16px", marginBottom: 20, display: "flex", gap: 8 }}>
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Jobsite name (e.g. Maple St Renovation)"
           style={{ ...inputStyle, marginBottom: 0, flex: 1 }} onKeyDown={(e) => e.key === "Enter" && addSite()} />
-        <button onClick={addSite} style={{ ...submitBtn, marginTop: 0, width: 140 }}>Create code</button>
+        <button onClick={addSite} disabled={busy} style={{ ...submitBtn, marginTop: 0, width: 140 }}>{busy ? "Creating..." : "Create code"}</button>
       </div>
 
       <SectionHead>Active jobsite codes</SectionHead>
