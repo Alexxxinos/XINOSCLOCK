@@ -259,7 +259,7 @@ function WorkerApp({ onBack, siteId, sites }) {
       .from("workers")
       .select("*")
       .eq("pin", pinInput)
-      .ilike("name", nameInput.trim())
+      .ilike("name", `%${nameInput.trim()}%`)
       .limit(1);
     setBusy(false);
     if (qErr || !data || !data.length) {
