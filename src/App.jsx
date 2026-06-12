@@ -838,33 +838,64 @@ function SectionHead({ children }) {
 // ---------- QR SECTION ----------
 function QRSection({ sites, setSites }) {
   const [name, setName] = useState("");
+  const [address, setAddress] = useState("");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  // Geocode an address to lat/lng using OpenStreetMap's free Nominatim API
+  async function geocode(addr) {
+    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(addr)}`;
+    const res = await fetch(url, { headers: { "Accept-Language": "en" } });
+    const data = await res.json();
+    if (!data || !data.length) return null;
+    return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon), display: data[0].display_name };
+  }
 
   async function addSite() {
-    if (!name.trim()) return;
+    if (!name.trim() || !address.trim()) {
+      setError("Enter both a jobsite name and an address.");
+      return;
+    }
     setBusy(true);
+    setError("");
+
+    const geo = await geocode(address.trim());
+    if (!geo) {
+      setBusy(false);
+      setError("Couldn't find that address. Try being more specific (street, city, state).");
+      return;
+    }
+
     const id = "site_" + Date.now();
     const newSite = {
       id, name: name.trim(), code: `Site #${sites.length + 1}`,
-      lat: 41.03 + (Math.random() - 0.5) * 0.04,
-      lng: -73.6 + (Math.random() - 0.5) * 0.04,
+      lat: geo.lat, lng: geo.lng,
+      address: geo.display,
       foreman: null,
     };
-    const { error } = await supabase.from("sites").insert(newSite);
+    const { error: insErr } = await supabase.from("sites").insert(newSite);
     setBusy(false);
-    if (!error) {
+    if (!insErr) {
       setSites([...sites, newSite]);
       setName("");
+      setAddress("");
+    } else {
+      setError("Couldn't save the jobsite. Try again.");
     }
   }
 
   return (
     <div>
       <SectionHead>Generate a new jobsite code</SectionHead>
-      <div style={{ ...card, padding: "14px 16px", marginBottom: 20, display: "flex", gap: 8 }}>
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Jobsite name (e.g. Maple St Renovation)"
-          style={{ ...inputStyle, marginBottom: 0, flex: 1 }} onKeyDown={(e) => e.key === "Enter" && addSite()} />
-        <button onClick={addSite} disabled={busy} style={{ ...submitBtn, marginTop: 0, width: 140 }}>{busy ? "Creating..." : "Create code"}</button>
+      <div style={{ ...card, padding: "14px 16px", marginBottom: 20 }}>
+        <div style={{ display: "flex", gap: 8, marginBottom: error ? 8 : 0 }}>
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Jobsite name (e.g. Maple St Renovation)"
+            style={{ ...inputStyle, marginBottom: 0, flex: 1 }} onKeyDown={(e) => e.key === "Enter" && addSite()} />
+          <input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Street address, city, state"
+            style={{ ...inputStyle, marginBottom: 0, flex: 1 }} onKeyDown={(e) => e.key === "Enter" && addSite()} />
+          <button onClick={addSite} disabled={busy} style={{ ...submitBtn, marginTop: 0, width: 140 }}>{busy ? "Locating..." : "Create code"}</button>
+        </div>
+        {error && <p style={{ fontSize: 11, color: "#A32D2D", margin: "8px 0 0" }}>{error}</p>}
       </div>
 
       <SectionHead>Active jobsite codes</SectionHead>
@@ -875,6 +906,7 @@ function QRSection({ sites, setSites }) {
             <div key={s.id} style={{ ...card, padding: 16, textAlign: "center" }}>
               <QRCode value={url} size={160} />
               <p style={{ fontSize: 13, fontWeight: 600, margin: "10px 0 2px" }}>{s.code} — {s.name}</p>
+              {s.address && <p style={{ fontSize: 11, color: "#6B6A66", margin: "0 0 6px" }}>{s.address}</p>}
               <p style={{ fontSize: 11, color: "#9A9893", margin: "0 0 8px", wordBreak: "break-all" }}>{url}</p>
               <p style={{ fontSize: 11, color: "#9A9893", margin: 0 }}>Print, laminate, and post at site entrance. Each scan checks the worker in automatically.</p>
             </div>
