@@ -596,10 +596,18 @@ function TabBtn({ active, children, onClick }) {
 
 // ---------- LIVE DASHBOARD ----------
 function Dashboard({ sites }) {
-  const site = sites[0] || FALLBACK_SITE;
+  const [selectedSiteId, setSelectedSiteId] = useState(sites[0]?.id || FALLBACK_SITE.id);
+  const site = sites.find((s) => s.id === selectedSiteId) || sites[0] || FALLBACK_SITE;
   const [roster, setRoster] = useState([]);
   const [loading, setLoading] = useState(true);
   const [tick, setTick] = useState(Date.now());
+
+  // Once real sites load, default to the first one if nothing selected yet
+  useEffect(() => {
+    if (sites.length && !sites.find((s) => s.id === selectedSiteId)) {
+      setSelectedSiteId(sites[0].id);
+    }
+  }, [sites]);
 
   // Build roster: for each worker, pair today's clock_in/clock_out events
   // into shifts. A worker can have multiple shifts in a day if they left
@@ -719,12 +727,26 @@ function Dashboard({ sites }) {
             {site.code} — {site.name}
           </p>
           <p style={{ fontSize: 12, color: "#6B6A66", margin: "4px 0 0" }}>
-            Foreman: {site.foreman} · {new Date().toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })}
+            Foreman: {site.foreman || "—"} · {new Date().toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })}
           </p>
         </div>
-        <div style={{ background: "#EAF3DE", color: "#27500A", fontSize: 11, padding: "4px 10px", borderRadius: 20, display: "flex", alignItems: "center", gap: 5 }}>
-          <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#3B6D11", animation: "pulse 1.5s infinite" }} />
-          Live
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <select
+            value={selectedSiteId}
+            onChange={(e) => setSelectedSiteId(e.target.value)}
+            style={{
+              fontSize: 13, padding: "7px 10px", borderRadius: 8, border: "1px solid #E5E3DD",
+              background: "#fff", color: "#1A1A1A", cursor: "pointer",
+            }}
+          >
+            {sites.map((s) => (
+              <option key={s.id} value={s.id}>{s.code} — {s.name}</option>
+            ))}
+          </select>
+          <div style={{ background: "#EAF3DE", color: "#27500A", fontSize: 11, padding: "4px 10px", borderRadius: 20, display: "flex", alignItems: "center", gap: 5 }}>
+            <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#3B6D11", animation: "pulse 1.5s infinite" }} />
+            Live
+          </div>
         </div>
       </div>
 
