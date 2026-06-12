@@ -59,6 +59,7 @@ const Icon = ({ name, size = 16, style }) => {
     dollar: "M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6",
     users: "M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75",
     clock: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM12 6v6l4 2",
+    x: "M18 6 6 18M6 6l12 12",
   };
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -884,6 +885,19 @@ function QRSection({ sites, setSites }) {
     }
   }
 
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
+
+  async function deleteSite(id) {
+    setDeletingId(id);
+    const { error: delErr } = await supabase.from("sites").delete().eq("id", id);
+    setDeletingId(null);
+    setConfirmDeleteId(null);
+    if (!delErr) {
+      setSites(sites.filter((s) => s.id !== id));
+    }
+  }
+
   return (
     <div>
       <SectionHead>Generate a new jobsite code</SectionHead>
@@ -902,13 +916,43 @@ function QRSection({ sites, setSites }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(220px,1fr))", gap: 16 }}>
         {sites.map((s) => {
           const url = `${window.location.origin}/punch/${s.id}`;
+          const confirming = confirmDeleteId === s.id;
           return (
-            <div key={s.id} style={{ ...card, padding: 16, textAlign: "center" }}>
+            <div key={s.id} style={{ ...card, padding: 16, textAlign: "center", position: "relative" }}>
+              <button
+                onClick={() => setConfirmDeleteId(confirming ? null : s.id)}
+                title="Delete jobsite"
+                style={{
+                  position: "absolute", top: 10, right: 10, width: 26, height: 26, borderRadius: 8,
+                  border: "1px solid #E5E3DD", background: "#fff", color: "#9A9893",
+                  display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", padding: 0,
+                }}
+              >
+                <Icon name="x" size={13} />
+              </button>
               <QRCode value={url} size={160} />
               <p style={{ fontSize: 13, fontWeight: 600, margin: "10px 0 2px" }}>{s.code} — {s.name}</p>
               {s.address && <p style={{ fontSize: 11, color: "#6B6A66", margin: "0 0 6px" }}>{s.address}</p>}
               <p style={{ fontSize: 11, color: "#9A9893", margin: "0 0 8px", wordBreak: "break-all" }}>{url}</p>
               <p style={{ fontSize: 11, color: "#9A9893", margin: 0 }}>Print, laminate, and post at site entrance. Each scan checks the worker in automatically.</p>
+
+              {confirming && (
+                <div style={{ marginTop: 12, padding: "10px 12px", background: "#FCEBEB", borderRadius: 8, textAlign: "left" }}>
+                  <p style={{ fontSize: 12, color: "#791F1F", margin: "0 0 8px" }}>
+                    Delete this jobsite and its QR code? Punch history for this site will remain in the database.
+                  </p>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button onClick={() => deleteSite(s.id)} disabled={deletingId === s.id}
+                      style={{ flex: 1, padding: "7px", borderRadius: 8, border: "none", background: "#A32D2D", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                      {deletingId === s.id ? "Deleting..." : "Delete"}
+                    </button>
+                    <button onClick={() => setConfirmDeleteId(null)}
+                      style={{ flex: 1, padding: "7px", borderRadius: 8, border: "1px solid #E5E3DD", background: "#fff", color: "#1A1A1A", fontSize: 12, cursor: "pointer" }}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           );
         })}
