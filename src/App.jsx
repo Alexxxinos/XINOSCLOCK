@@ -575,8 +575,11 @@ function SupervisorApp({ onBack, sites, setSites }) {
         <div style={{ display: "flex", gap: 8, marginBottom: 16, marginTop: 16 }}>
           <TabBtn active={tab === "dashboard"} onClick={() => setTab("dashboard")}>Live dashboard</TabBtn>
           <TabBtn active={tab === "qr"} onClick={() => setTab("qr")}>Jobsite QR codes</TabBtn>
+          <TabBtn active={tab === "workers"} onClick={() => setTab("workers")}>Workers</TabBtn>
         </div>
-        {tab === "dashboard" ? <Dashboard sites={sites} /> : <QRSection sites={sites} setSites={setSites} />}
+        {tab === "dashboard" && <Dashboard sites={sites} />}
+        {tab === "qr" && <QRSection sites={sites} setSites={setSites} />}
+        {tab === "workers" && <WorkersSection />}
       </div>
     </Shell>
   );
@@ -983,7 +986,68 @@ function QRSection({ sites, setSites }) {
   );
 }
 
-// ---------- SHARED CHROME ----------
+// ---------- WORKERS SECTION ----------
+function WorkersSection() {
+  const [workers, setWorkers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [revealedId, setRevealedId] = useState(null);
+  const [search, setSearch] = useState("");
+
+  useEffect(() => {
+    supabase.from("workers").select("*").order("name", { ascending: true }).then(({ data, error }) => {
+      if (!error && data) setWorkers(data);
+      setLoading(false);
+    });
+  }, []);
+
+  const filtered = workers.filter((w) =>
+    w.name.toLowerCase().includes(search.toLowerCase()) ||
+    (w.company || "").toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <div>
+      <SectionHead>All workers</SectionHead>
+      <div style={{ ...card, padding: "14px 16px", marginBottom: 16 }}>
+        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by name or company"
+          style={{ ...inputStyle, marginBottom: 0 }} />
+      </div>
+
+      <div style={card}>
+        <div style={{ ...workerRow, ...rowHeader }}>
+          <div></div><div>Name</div><div>Company</div><div>PIN</div>
+        </div>
+        {loading && <div style={{ padding: "14px 16px", fontSize: 12, color: "#9A9893" }}>Loading...</div>}
+        {!loading && filtered.length === 0 && (
+          <div style={{ padding: "14px 16px", fontSize: 12, color: "#9A9893" }}>No workers found.</div>
+        )}
+        {filtered.map((w) => (
+          <div key={w.id} style={workerRow}>
+            <div style={{ width: 32, height: 32, borderRadius: "50%", background: w.bg, color: w.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700 }}>{w.initials}</div>
+            <div style={{ fontSize: 13, fontWeight: 500 }}>{w.name}</div>
+            <div style={{ fontSize: 13, color: "#6B6A66" }}>{w.company || "—"}</div>
+            <div>
+              <button
+                onClick={() => setRevealedId(revealedId === w.id ? null : w.id)}
+                style={{
+                  fontSize: 13, fontFamily: "monospace", border: "none", background: "transparent",
+                  color: revealedId === w.id ? "#1A1A1A" : "#9A9893", cursor: "pointer", padding: "2px 6px",
+                  borderRadius: 6, display: "flex", alignItems: "center", gap: 6,
+                }}
+              >
+                {revealedId === w.id ? w.pin : "••••"}
+                <Icon name="lock" size={12} />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+      <p style={{ fontSize: 11, color: "#9A9893", marginTop: 10 }}>Click a PIN to reveal it. Workers use their name + PIN to sign in on the jobsite QR scan.</p>
+    </div>
+  );
+}
+
+
 function Shell({ onBack, title, children }) {
   return (
     <div>
@@ -1013,3 +1077,4 @@ const card = { background: "#fff", border: "1px solid #E5E3DD", borderRadius: 12
 const rosterRow = { display: "grid", gridTemplateColumns: "32px 1.6fr 90px 80px 80px 90px 130px", alignItems: "center", gap: 10, padding: "10px 14px", borderBottom: "0.5px solid #F0EEE8" };
 const hoursRow = { display: "grid", gridTemplateColumns: "1.6fr 90px 90px 90px", alignItems: "center", gap: 10, padding: "9px 14px", borderBottom: "0.5px solid #F0EEE8" };
 const rowHeader = { background: "#FAFAF8", fontSize: 11, color: "#9A9893", fontWeight: 600, borderBottom: "0.5px solid #E5E3DD" };
+const workerRow = { display: "grid", gridTemplateColumns: "32px 1.6fr 1fr 100px", alignItems: "center", gap: 10, padding: "10px 14px", borderBottom: "0.5px solid #F0EEE8" };
