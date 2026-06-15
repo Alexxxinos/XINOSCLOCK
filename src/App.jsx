@@ -143,6 +143,7 @@ const STRINGS = {
     waiverCheckboxLabel: "I have read and agree to the statement below",
     waiverLinkText: "View full statement",
     waiverRequired: "You must agree to the statement above before submitting your signature.",
+    signatureRequired: "Please sign in the box above before submitting.",
     waiverModalTitle: "Daily Acknowledgment",
     waiverModalClose: "Close",
     languageToggle: "Español",
@@ -200,6 +201,7 @@ const STRINGS = {
     waiverCheckboxLabel: "He leído y acepto la siguiente declaración",
     waiverLinkText: "Ver declaración completa",
     waiverRequired: "Debes aceptar la declaración anterior antes de enviar tu firma.",
+    signatureRequired: "Por favor firma en el cuadro de arriba antes de continuar.",
     waiverModalTitle: "Reconocimiento diario",
     waiverModalClose: "Cerrar",
     languageToggle: "English",
@@ -461,14 +463,21 @@ function WorkerApp({ onBack, siteId, sites }) {
   }
 
   // Once we know who the worker is, check whether they already have
-  // an open (un-clocked-out) punch for this site — if so, skip
+  // an open (un-clocked-out) punch for THIS SITE, TODAY -- if so, skip
   // straight to the clocked-in view instead of asking to clock in again.
+  // A stale open punch from a previous day (e.g. someone forgot to clock
+  // out) should NOT be picked up here, since that would show a bogus
+  // multi-day "elapsed time" -- instead, just start a fresh clock-in.
   async function checkOpenPunch(w) {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
     const { data } = await supabase
       .from("punch_events")
       .select("*")
       .eq("worker_id", w.id)
       .eq("site_id", site.id)
+      .gte("timestamp", todayStart.toISOString())
       .order("timestamp", { ascending: false })
       .limit(1);
 
@@ -544,14 +553,13 @@ function WorkerApp({ onBack, siteId, sites }) {
     // someone switches browsers (e.g. Safari -> Chrome) on the same phone
     // to bypass the localStorage check above.
     const fingerprint = await getDeviceFingerprint();
-    const { data: fpLock, error: fpErr } = await supabase
+    const { data: fpLock } = await supabase
       .from("device_locks")
       .select("*")
       .eq("fingerprint", fingerprint)
       .eq("site_id", site.id)
       .eq("lock_date", new Date().toISOString().slice(0, 10))
       .limit(1);
-    console.log("fingerprint lookup:", { fingerprint, fpLock, fpErr });
     if (fpLock && fpLock.length && fpLock[0].worker_id !== found.id) {
       setError(t.deviceLockedOther(fpLock[0].worker_name || "another worker"));
       // Mirror the lock into localStorage too so this browser is
@@ -614,13 +622,11 @@ function WorkerApp({ onBack, siteId, sites }) {
           .update({ worker_id: w.id, worker_name: w.name })
           .eq("id", existing[0].id);
         if (updErr) console.error("device_locks update error:", updErr);
-        else console.log("device_locks update OK, fingerprint:", fingerprint);
       } else {
         const { error: insErr2 } = await supabase
           .from("device_locks")
           .insert({ fingerprint, site_id: site.id, worker_id: w.id, worker_name: w.name, lock_date: today });
         if (insErr2) console.error("device_locks insert error:", insErr2);
-        else console.log("device_locks insert OK, fingerprint:", fingerprint);
       }
     });
 
@@ -691,23 +697,32 @@ function WorkerApp({ onBack, siteId, sites }) {
     doClockIn(data);
   }
 
-  const elapsed = clockInTime ? now - clockInTime : 0;
+  // Clamp to 0: if the server's clock-in timestamp is very slightly ahead
+  // of this device's clock (a few seconds of clock skew is normal), don't
+  // show a negative "elapsed time" -- just show 0 until the client catches up.
+  const elapsed = clockInTime ? Math.max(0, now - clockInTime) : 0;
 
   // Waiver acknowledgment state -- required before either signature can
   // be submitted. Resets each time a new signature screen is shown.
   const [waiverChecked, setWaiverChecked] = useState(false);
   const [waiverModalOpen, setWaiverModalOpen] = useState(null); // null | "clockIn" | "clockOut"
   const [waiverError, setWaiverError] = useState("");
+  const [hasSignature, setHasSignature] = useState(false);
 
   useEffect(() => {
     // Reset acknowledgment whenever we enter a signature stage
     if (stage === "sign_in" || stage === "sign_out") {
       setWaiverChecked(false);
       setWaiverError("");
+      setHasSignature(false);
     }
   }, [stage]);
 
   function requireWaiver(onConfirm) {
+    if (!hasSignature) {
+      setWaiverError(t.signatureRequired);
+      return;
+    }
     if (!waiverChecked) {
       setWaiverError(t.waiverRequired);
       return;
@@ -799,7 +814,7 @@ function WorkerApp({ onBack, siteId, sites }) {
                 onViewWaiver={() => setWaiverModalOpen("clockIn")}
               />
               {waiverError && <p style={{ fontSize: 11, color: "#A32D2D", margin: "0 0 8px" }}>{waiverError}</p>}
-              <SignaturePad />
+              <SignaturePad onChange={setHasSignature} />
               <button onClick={() => requireWaiver(() => setStage("checked_in"))} style={submitBtn}>{t.submitAndCheckIn}</button>
             </div>
           )}
@@ -858,7 +873,7 @@ function WorkerApp({ onBack, siteId, sites }) {
                 onViewWaiver={() => setWaiverModalOpen("clockOut")}
               />
               {waiverError && <p style={{ fontSize: 11, color: "#A32D2D", margin: "0 0 8px" }}>{waiverError}</p>}
-              <SignaturePad />
+              <SignaturePad onChange={setHasSignature} />
               <button onClick={() => requireWaiver(doClockOut)} disabled={busy} style={submitBtn}>{busy ? t.submitting : t.submitAndClockOut}</button>
             </div>
           )}
@@ -962,10 +977,11 @@ function GpsRow({ status, accuracy, t }) {
   );
 }
 
-function SignaturePad() {
+function SignaturePad({ onChange }) {
   const canvasRef = useRef(null);
   const drawing = useRef(false);
   const ctxRef = useRef(null);
+  const hasDrawnRef = useRef(false);
 
   useEffect(() => {
     const c = canvasRef.current;
@@ -1012,6 +1028,10 @@ function SignaturePad() {
       const [x, y] = pos(e);
       ctx.lineTo(x, y);
       ctx.stroke();
+      if (!hasDrawnRef.current) {
+        hasDrawnRef.current = true;
+        if (onChange) onChange(true);
+      }
       e.preventDefault();
     };
     const end = (e) => { drawing.current = false; e.preventDefault(); };
