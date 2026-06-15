@@ -130,9 +130,12 @@ function HomeScreen({ onSelect }) {
       <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 56, height: 56, borderRadius: 14, background: "#1D9E75", color: "#fff", marginBottom: 20 }}>
         <Icon name="building" size={28} />
       </div>
-      <h1 style={{ fontSize: 32, fontWeight: 600, margin: "0 0 8px", letterSpacing: "-0.02em" }}>SiteClock</h1>
-      <p style={{ fontSize: 15, color: "#6B6A66", margin: "0 0 40px" }}>
-        Scan in, scan out. Live crew tracking for every jobsite.
+      <h1 style={{ fontSize: 32, fontWeight: 600, margin: "0 0 8px", letterSpacing: "-0.02em" }}>Xora</h1>
+      <p style={{ fontSize: 15, color: "#6B6A66", margin: "0 0 6px" }}>
+        Just Xora in. Live crew tracking for every jobsite.
+      </p>
+      <p style={{ fontSize: 12, color: "#B5B3AD", margin: "0 0 40px" }}>
+        Powered by Xinos Construction
       </p>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
