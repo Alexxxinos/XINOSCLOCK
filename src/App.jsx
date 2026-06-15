@@ -337,15 +337,15 @@ export default function App() {
 function HomeScreen({ onSelect }) {
   return (
     <div style={{ maxWidth: 720, margin: "0 auto", padding: "60px 24px", textAlign: "center" }}>
-      <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 56, height: 56, borderRadius: 14, background: "#1D9E75", color: "#fff", marginBottom: 20 }}>
-        <Icon name="building" size={28} />
+      <div style={{ display: "flex", justifyContent: "center", marginBottom: 24 }}>
+        <img src="/xinos-logo.png" alt="Xinos Construction" style={{ width: 260, maxWidth: "100%", height: "auto" }} />
       </div>
       <h1 style={{ fontSize: 32, fontWeight: 600, margin: "0 0 8px", letterSpacing: "-0.02em" }}>Xora</h1>
       <p style={{ fontSize: 15, color: "#6B6A66", margin: "0 0 6px" }}>
         Just Xora in. Live crew tracking for every jobsite.
       </p>
       <p style={{ fontSize: 12, color: "#B5B3AD", margin: "0 0 40px" }}>
-        Powered by Xinos Construction
+        Powered by Alex Sakarellos
       </p>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
