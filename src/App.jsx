@@ -45,6 +45,34 @@ function setDeviceLock(siteId, workerId, workerName) {
   } catch {}
 }
 
+// ---------- DEVICE FINGERPRINT ----------
+// localStorage is per-browser, so switching from Safari to Chrome on the
+// same phone bypasses the localStorage-based lock above. To close that
+// gap, generate a fingerprint from device characteristics that are shared
+// across browsers on the same physical device (screen size, pixel ratio,
+// timezone, hardware concurrency, platform). This is not foolproof --
+// a determined person could still spoof it -- but it closes the easy
+// "switch browsers" workaround without requiring native apps or accounts.
+async function getDeviceFingerprint() {
+  const parts = [
+    screen.width,
+    screen.height,
+    screen.colorDepth,
+    window.devicePixelRatio || 1,
+    Intl.DateTimeFormat().resolvedOptions().timeZone,
+    navigator.hardwareConcurrency || 0,
+    navigator.platform || "",
+    navigator.maxTouchPoints || 0,
+  ].join("|");
+
+  // Hash it so we don't store raw device details
+  const encoder = new TextEncoder();
+  const data = encoder.encode(parts);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 // ---------- LANGUAGE / TRANSLATIONS ----------
 // Simple dictionary-based i18n for the worker-facing punch screens.
 // Preference is stored in localStorage per device, defaulting to English.
@@ -504,11 +532,30 @@ function WorkerApp({ onBack, siteId, sites }) {
     }
     const found = data[0];
 
-    // Device lock check: if this device already signed someone else in
-    // at this jobsite today, block a different worker from using it.
+    // Device lock check (localStorage): if THIS browser already signed
+    // someone else in at this jobsite today, block a different worker.
     const lock = getDeviceLock(site.id);
     if (lock && lock.workerId !== found.id) {
       setError(t.deviceLockedOther(lock.workerName));
+      return;
+    }
+
+    // Device lock check (server-side fingerprint): catches the case where
+    // someone switches browsers (e.g. Safari -> Chrome) on the same phone
+    // to bypass the localStorage check above.
+    const fingerprint = await getDeviceFingerprint();
+    const { data: fpLock } = await supabase
+      .from("device_locks")
+      .select("*")
+      .eq("fingerprint", fingerprint)
+      .eq("site_id", site.id)
+      .eq("lock_date", new Date().toISOString().slice(0, 10))
+      .limit(1);
+    if (fpLock && fpLock.length && fpLock[0].worker_id !== found.id) {
+      setError(t.deviceLockedOther(fpLock[0].worker_name || "another worker"));
+      // Mirror the lock into localStorage too so this browser is
+      // consistent going forward.
+      setDeviceLock(site.id, fpLock[0].worker_id, fpLock[0].worker_name);
       return;
     }
 
@@ -540,6 +587,20 @@ function WorkerApp({ onBack, siteId, sites }) {
     setBusy(false);
     if (insErr) { setError(t.couldntSaveClockIn(insErr.message)); return; }
     setDeviceLock(site.id, w.id, w.name);
+
+    // Record the server-side fingerprint lock too, so switching browsers
+    // on this device can't be used to clock in a different worker today.
+    // upsert: if this fingerprint+site+date combo already has a row (e.g.
+    // from a prior worker who's since clocked out), this just confirms it
+    // still belongs to the current worker -- it does NOT overwrite a lock
+    // held by someone else, since that case is already blocked in tryLogin.
+    getDeviceFingerprint().then((fingerprint) => {
+      supabase.from("device_locks").upsert(
+        { fingerprint, site_id: site.id, worker_id: w.id, worker_name: w.name, lock_date: new Date().toISOString().slice(0, 10) },
+        { onConflict: "fingerprint,site_id,lock_date" }
+      );
+    });
+
     setClockInTime(new Date(data.timestamp).getTime());
     setOpenPunchId(data.id);
     setStage("sign_in");
@@ -559,12 +620,27 @@ function WorkerApp({ onBack, siteId, sites }) {
   async function submitSignup() {
     if (!signupForm.name || !signupForm.pin) { setError(t.nameAndPinRequired); return; }
 
-    // Device lock check applies to new accounts too — if this device
-    // already signed someone else in at this jobsite today, don't
-    // allow creating yet another account from the same device.
+    // Device lock check (localStorage) applies to new accounts too -- if
+    // this browser already signed someone else in at this jobsite today,
+    // don't allow creating yet another account from the same device.
     const lock = getDeviceLock(site.id);
     if (lock) {
       setError(t.deviceLockedSignup(lock.workerName));
+      return;
+    }
+
+    // Device lock check (server-side fingerprint): catches the same-device,
+    // different-browser case for new account creation too.
+    const fingerprint = await getDeviceFingerprint();
+    const { data: fpLock } = await supabase
+      .from("device_locks")
+      .select("*")
+      .eq("fingerprint", fingerprint)
+      .eq("site_id", site.id)
+      .eq("lock_date", new Date().toISOString().slice(0, 10))
+      .limit(1);
+    if (fpLock && fpLock.length) {
+      setError(t.deviceLockedSignup(fpLock[0].worker_name || "another worker"));
       return;
     }
 
