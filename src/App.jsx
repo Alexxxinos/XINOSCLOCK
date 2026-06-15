@@ -544,13 +544,14 @@ function WorkerApp({ onBack, siteId, sites }) {
     // someone switches browsers (e.g. Safari -> Chrome) on the same phone
     // to bypass the localStorage check above.
     const fingerprint = await getDeviceFingerprint();
-    const { data: fpLock } = await supabase
+    const { data: fpLock, error: fpErr } = await supabase
       .from("device_locks")
       .select("*")
       .eq("fingerprint", fingerprint)
       .eq("site_id", site.id)
       .eq("lock_date", new Date().toISOString().slice(0, 10))
       .limit(1);
+    console.log("fingerprint lookup:", { fingerprint, fpLock, fpErr });
     if (fpLock && fpLock.length && fpLock[0].worker_id !== found.id) {
       setError(t.deviceLockedOther(fpLock[0].worker_name || "another worker"));
       // Mirror the lock into localStorage too so this browser is
@@ -590,15 +591,37 @@ function WorkerApp({ onBack, siteId, sites }) {
 
     // Record the server-side fingerprint lock too, so switching browsers
     // on this device can't be used to clock in a different worker today.
-    // upsert: if this fingerprint+site+date combo already has a row (e.g.
-    // from a prior worker who's since clocked out), this just confirms it
-    // still belongs to the current worker -- it does NOT overwrite a lock
-    // held by someone else, since that case is already blocked in tryLogin.
-    getDeviceFingerprint().then((fingerprint) => {
-      supabase.from("device_locks").upsert(
-        { fingerprint, site_id: site.id, worker_id: w.id, worker_name: w.name, lock_date: new Date().toISOString().slice(0, 10) },
-        { onConflict: "fingerprint,site_id,lock_date" }
-      );
+    // Using select-then-insert/update instead of upsert() to avoid any
+    // ambiguity with onConflict matching the table's unique constraint.
+    getDeviceFingerprint().then(async (fingerprint) => {
+      const today = new Date().toISOString().slice(0, 10);
+      const { data: existing, error: selErr } = await supabase
+        .from("device_locks")
+        .select("id")
+        .eq("fingerprint", fingerprint)
+        .eq("site_id", site.id)
+        .eq("lock_date", today)
+        .limit(1);
+
+      if (selErr) {
+        console.error("device_locks select error:", selErr);
+        return;
+      }
+
+      if (existing && existing.length) {
+        const { error: updErr } = await supabase
+          .from("device_locks")
+          .update({ worker_id: w.id, worker_name: w.name })
+          .eq("id", existing[0].id);
+        if (updErr) console.error("device_locks update error:", updErr);
+        else console.log("device_locks update OK, fingerprint:", fingerprint);
+      } else {
+        const { error: insErr2 } = await supabase
+          .from("device_locks")
+          .insert({ fingerprint, site_id: site.id, worker_id: w.id, worker_name: w.name, lock_date: today });
+        if (insErr2) console.error("device_locks insert error:", insErr2);
+        else console.log("device_locks insert OK, fingerprint:", fingerprint);
+      }
     });
 
     setClockInTime(new Date(data.timestamp).getTime());
