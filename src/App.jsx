@@ -21,6 +21,30 @@ const GEOFENCE_RADIUS_FT = 2000;
 // Fallback site used only if the sites table hasn't loaded yet
 const FALLBACK_SITE = { id: "site_4", name: "Riverside Ave", code: "Site #4", lat: 41.0262, lng: -73.5783, foreman: "Dave Keller" };
 
+// ---------- DEVICE LOCK (anti buddy-punching) ----------
+// Each physical device can only be used to sign in as ONE worker per
+// jobsite per day. This stops one person from scanning in coworkers
+// using their PINs. The lock is keyed by site so the same phone CAN
+// be used for a different jobsite (e.g. a supervisor visiting multiple
+// sites), but not to clock in multiple different people at the same site.
+function deviceLockKey(siteId) {
+  const today = new Date().toISOString().slice(0, 10);
+  return `xora_lock_${siteId}_${today}`;
+}
+function getDeviceLock(siteId) {
+  try {
+    const raw = localStorage.getItem(deviceLockKey(siteId));
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+function setDeviceLock(siteId, workerId, workerName) {
+  try {
+    localStorage.setItem(deviceLockKey(siteId), JSON.stringify({ workerId, workerName }));
+  } catch {}
+}
+
 
 // distance in feet between two lat/lng points (haversine)
 function distFeet(lat1, lng1, lat2, lng2) {
@@ -272,6 +296,15 @@ function WorkerApp({ onBack, siteId, sites }) {
       return;
     }
     const found = data[0];
+
+    // Device lock check: if this device already signed someone else in
+    // at this jobsite today, block a different worker from using it.
+    const lock = getDeviceLock(site.id);
+    if (lock && lock.workerId !== found.id) {
+      setError(`This device was already used to sign in ${lock.workerName} at this jobsite today. Each device can only sign in one worker per jobsite per day. Ask ${lock.workerName} to use their own device, or have them sign out first.`);
+      return;
+    }
+
     setWorker(found);
     await checkOpenPunch(found);
   }
@@ -297,6 +330,7 @@ function WorkerApp({ onBack, siteId, sites }) {
       .single();
     setBusy(false);
     if (insErr) { setError("Couldn't save your clock-in: " + insErr.message); return; }
+    setDeviceLock(site.id, w.id, w.name);
     setClockInTime(new Date(data.timestamp).getTime());
     setOpenPunchId(data.id);
     setStage("sign_in");
@@ -314,6 +348,16 @@ function WorkerApp({ onBack, siteId, sites }) {
 
   async function submitSignup() {
     if (!signupForm.name || !signupForm.pin) { setError("Name and PIN are required."); return; }
+
+    // Device lock check applies to new accounts too — if this device
+    // already signed someone else in at this jobsite today, don't
+    // allow creating yet another account from the same device.
+    const lock = getDeviceLock(site.id);
+    if (lock) {
+      setError(`This device was already used to sign in ${lock.workerName} at this jobsite today. Each device can only sign in one worker per jobsite per day. Please use your own device.`);
+      return;
+    }
+
     setBusy(true);
     setError("");
     const initials = signupForm.name.split(" ").map((s) => s[0]).join("").slice(0, 2).toUpperCase();
@@ -517,10 +561,21 @@ function SignaturePad() {
   const drawing = useRef(false);
   useEffect(() => {
     const c = canvasRef.current;
+    const dpr = window.devicePixelRatio || 1;
+
+    // Make the canvas's internal pixel buffer match its actual
+    // rendered CSS size (times device pixel ratio for sharpness),
+    // so pointer coordinates line up with where strokes are drawn.
+    const rect = c.getBoundingClientRect();
+    c.width = rect.width * dpr;
+    c.height = rect.height * dpr;
+
     const ctx = c.getContext("2d");
+    ctx.scale(dpr, dpr);
     ctx.strokeStyle = "#1A1A1A";
     ctx.lineWidth = 2;
     ctx.lineCap = "round";
+
     const pos = (e) => {
       const r = c.getBoundingClientRect();
       const t = e.touches ? e.touches[0] : e;
@@ -537,8 +592,8 @@ function SignaturePad() {
     };
   }, []);
   return (
-    <canvas ref={canvasRef} width={148} height={60}
-      style={{ border: "1px dashed #D8D6CF", borderRadius: 8, width: "100%", height: 60, marginBottom: 10, touchAction: "none" }} />
+    <canvas ref={canvasRef}
+      style={{ border: "1px dashed #D8D6CF", borderRadius: 8, width: "100%", height: 60, marginBottom: 10, touchAction: "none", display: "block" }} />
   );
 }
 
