@@ -61,6 +61,7 @@ const Icon = ({ name, size = 16, style }) => {
     clock: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM12 6v6l4 2",
     x: "M18 6 6 18M6 6l12 12",
     calendar: "M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z",
+    download: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3",
   };
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -716,6 +717,130 @@ function Dashboard({ sites }) {
     loadRoster();
   }, [site.id, selectedDate]);
 
+  // ---- Export to CSV ----
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportStart, setExportStart] = useState(selectedDate);
+  const [exportEnd, setExportEnd] = useState(selectedDate);
+  const [exporting, setExporting] = useState(false);
+
+  function csvEscape(val) {
+    const s = String(val ?? "");
+    if (s.includes(",") || s.includes('"') || s.includes("\n")) {
+      return `"${s.replace(/"/g, '""')}"`;
+    }
+    return s;
+  }
+
+  function downloadCsv(filename, rows) {
+    const csv = rows.map((r) => r.map(csvEscape).join(",")).join("\r\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  // Export every raw punch event in the date range for this site,
+  // one row per clock-in/clock-out, plus computed daily totals per worker.
+  async function exportRange() {
+    setExporting(true);
+    const dayStart = new Date(exportStart + "T00:00:00");
+    const dayEnd = new Date(exportEnd + "T23:59:59.999");
+
+    const { data: events, error } = await supabase
+      .from("punch_events")
+      .select("*, workers(*)")
+      .eq("site_id", site.id)
+      .gte("timestamp", dayStart.toISOString())
+      .lte("timestamp", dayEnd.toISOString())
+      .order("timestamp", { ascending: true });
+
+    setExporting(false);
+    if (error || !events) return;
+
+    // Sheet 1 style: raw punch log
+    const rawRows = [
+      ["Jobsite", "Worker", "Company", "Type", "Date", "Time", "Latitude", "Longitude", "GPS Accuracy (m)", "Flagged", "Flag Reason"],
+    ];
+    for (const ev of events) {
+      const t = new Date(ev.timestamp);
+      rawRows.push([
+        `${site.code} - ${site.name}`,
+        ev.workers?.name || "Unknown",
+        ev.workers?.company || "",
+        ev.type === "clock_in" ? "Clock In" : "Clock Out",
+        t.toLocaleDateString(),
+        t.toLocaleTimeString(),
+        ev.lat ?? "",
+        ev.lng ?? "",
+        ev.gps_accuracy ?? "",
+        ev.flagged ? "Yes" : "No",
+        ev.flag_reason || "",
+      ]);
+    }
+
+    downloadCsv(
+      `${site.code.replace(/[^a-z0-9]/gi, "_")}_punches_${exportStart}_to_${exportEnd}.csv`,
+      rawRows
+    );
+
+    // Sheet 2 style: daily totals per worker per day (separate file, since
+    // CSV doesn't support multiple sheets)
+    const dailyTotals = {}; // key: date|workerId
+    for (const ev of events) {
+      const dateStr = new Date(ev.timestamp).toLocaleDateString();
+      const key = dateStr + "|" + ev.worker_id;
+      if (!dailyTotals[key]) {
+        dailyTotals[key] = {
+          date: dateStr,
+          worker: ev.workers?.name || "Unknown",
+          company: ev.workers?.company || "",
+          totalMs: 0,
+          openClockIn: null,
+          missingClockOut: false,
+          flags: 0,
+        };
+      }
+      const row = dailyTotals[key];
+      if (ev.type === "clock_in") {
+        row.openClockIn = new Date(ev.timestamp).getTime();
+        if (ev.flagged) row.flags += 1;
+      } else if (ev.type === "clock_out" && row.openClockIn) {
+        row.totalMs += new Date(ev.timestamp).getTime() - row.openClockIn;
+        row.openClockIn = null;
+      }
+    }
+    for (const row of Object.values(dailyTotals)) {
+      if (row.openClockIn) row.missingClockOut = true;
+    }
+
+    const totalsRows = [
+      ["Jobsite", "Date", "Worker", "Company", "Total Hours", "Flags", "Missing Clock-Out"],
+    ];
+    for (const row of Object.values(dailyTotals)) {
+      totalsRows.push([
+        `${site.code} - ${site.name}`,
+        row.date,
+        row.worker,
+        row.company,
+        row.missingClockOut ? "" : (row.totalMs / 3600000).toFixed(2),
+        row.flags,
+        row.missingClockOut ? "Yes" : "No",
+      ]);
+    }
+
+    downloadCsv(
+      `${site.code.replace(/[^a-z0-9]/gi, "_")}_hours_summary_${exportStart}_to_${exportEnd}.csv`,
+      totalsRows
+    );
+
+    setExportOpen(false);
+  }
+
   // Live tick: only relevant when viewing today
   useEffect(() => {
     if (!isToday) return;
@@ -793,8 +918,38 @@ function Dashboard({ sites }) {
               Live
             </div>
           )}
+          <button
+            onClick={() => { setExportStart(selectedDate); setExportEnd(selectedDate); setExportOpen(true); }}
+            style={{ ...submitBtn, margin: 0, width: "auto", padding: "7px 14px", display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}
+          >
+            <Icon name="download" size={14} />Export
+          </button>
         </div>
       </div>
+
+      {exportOpen && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.3)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }}
+          onClick={() => setExportOpen(false)}>
+          <div style={{ background: "#fff", borderRadius: 14, padding: 24, width: 360, maxWidth: "90vw" }} onClick={(e) => e.stopPropagation()}>
+            <p style={{ fontSize: 15, fontWeight: 600, margin: "0 0 4px" }}>Export to Excel/CSV</p>
+            <p style={{ fontSize: 12, color: "#9A9893", margin: "0 0 16px" }}>
+              Downloads two CSV files for {site.code} — {site.name}: a raw punch log and a daily hours summary. Both open directly in Excel.
+            </p>
+            <p style={{ fontSize: 12, fontWeight: 500, margin: "0 0 4px" }}>From</p>
+            <input type="date" value={exportStart} max={todayStr} onChange={(e) => setExportStart(e.target.value)} style={{ ...inputStyle, marginBottom: 10 }} />
+            <p style={{ fontSize: 12, fontWeight: 500, margin: "0 0 4px" }}>To</p>
+            <input type="date" value={exportEnd} max={todayStr} onChange={(e) => setExportEnd(e.target.value)} style={{ ...inputStyle, marginBottom: 16 }} />
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={exportRange} disabled={exporting} style={{ ...submitBtn, margin: 0, flex: 1 }}>
+                {exporting ? "Exporting..." : "Download CSV files"}
+              </button>
+              <button onClick={() => setExportOpen(false)} style={{ ...ghostBtn, margin: 0, flex: 1, border: "1px solid #E5E3DD", borderRadius: 10, padding: "12px" }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4,minmax(0,1fr))", gap: 10, marginBottom: 16 }}>
         <Metric label={isToday ? "On site now" : "Still clocked in (no checkout)"} value={onSite} />
