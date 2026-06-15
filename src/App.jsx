@@ -86,6 +86,7 @@ const Icon = ({ name, size = 16, style }) => {
     x: "M18 6 6 18M6 6l12 12",
     calendar: "M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z",
     download: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3",
+    printer: "M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M6 14h12v8H6z",
   };
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -96,7 +97,7 @@ const Icon = ({ name, size = 16, style }) => {
 };
 
 // ---------- QR CODE (real, scannable) ----------
-function QRCode({ value, size = 180 }) {
+const QRCode = React.forwardRef(function QRCode({ value, size = 180 }, forwardedRef) {
   const canvasRef = useRef(null);
   useEffect(() => {
     let cancelled = false;
@@ -110,7 +111,20 @@ function QRCode({ value, size = 180 }) {
     });
     return () => { cancelled = true; };
   }, [value, size]);
-  return <canvas ref={canvasRef} width={size} height={size} style={{ background: "#fff", borderRadius: 8 }} />;
+  return <canvas ref={(el) => { canvasRef.current = el; if (forwardedRef) forwardedRef.current = el; }} width={size} height={size} style={{ background: "#fff", borderRadius: 8 }} />;
+});
+
+// ---------- RESPONSIVE HELPER ----------
+function useIsMobile(breakpoint = 720) {
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window !== "undefined" ? window.innerWidth < breakpoint : false
+  );
+  useEffect(() => {
+    function onResize() { setIsMobile(window.innerWidth < breakpoint); }
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [breakpoint]);
+  return isMobile;
 }
 
 // ============================================================
@@ -559,38 +573,75 @@ function GpsRow({ status, accuracy }) {
 function SignaturePad() {
   const canvasRef = useRef(null);
   const drawing = useRef(false);
+  const ctxRef = useRef(null);
+
   useEffect(() => {
     const c = canvasRef.current;
-    const dpr = window.devicePixelRatio || 1;
+    if (!c) return;
 
-    // Make the canvas's internal pixel buffer match its actual
-    // rendered CSS size (times device pixel ratio for sharpness),
-    // so pointer coordinates line up with where strokes are drawn.
-    const rect = c.getBoundingClientRect();
-    c.width = rect.width * dpr;
-    c.height = rect.height * dpr;
+    function setup() {
+      const rect = c.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      // Fallback dimensions if the canvas hasn't been laid out yet
+      const w = rect.width || 280;
+      const h = rect.height || 60;
+      c.width = w * dpr;
+      c.height = h * dpr;
+      const ctx = c.getContext("2d");
+      ctx.scale(dpr, dpr);
+      ctx.strokeStyle = "#1A1A1A";
+      ctx.lineWidth = 2;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctxRef.current = ctx;
+    }
 
-    const ctx = c.getContext("2d");
-    ctx.scale(dpr, dpr);
-    ctx.strokeStyle = "#1A1A1A";
-    ctx.lineWidth = 2;
-    ctx.lineCap = "round";
+    // Defer to next frame so the element has real layout dimensions
+    const raf = requestAnimationFrame(setup);
 
     const pos = (e) => {
       const r = c.getBoundingClientRect();
       const t = e.touches ? e.touches[0] : e;
       return [t.clientX - r.left, t.clientY - r.top];
     };
-    const start = (e) => { drawing.current = true; const [x, y] = pos(e); ctx.beginPath(); ctx.moveTo(x, y); };
-    const move = (e) => { if (!drawing.current) return; const [x, y] = pos(e); ctx.lineTo(x, y); ctx.stroke(); e.preventDefault(); };
-    const end = () => { drawing.current = false; };
-    c.addEventListener("mousedown", start); c.addEventListener("mousemove", move); c.addEventListener("mouseup", end);
-    c.addEventListener("touchstart", start); c.addEventListener("touchmove", move); c.addEventListener("touchend", end);
+    const start = (e) => {
+      drawing.current = true;
+      const ctx = ctxRef.current;
+      if (!ctx) return;
+      const [x, y] = pos(e);
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      e.preventDefault();
+    };
+    const move = (e) => {
+      if (!drawing.current) return;
+      const ctx = ctxRef.current;
+      if (!ctx) return;
+      const [x, y] = pos(e);
+      ctx.lineTo(x, y);
+      ctx.stroke();
+      e.preventDefault();
+    };
+    const end = (e) => { drawing.current = false; e.preventDefault(); };
+
+    c.addEventListener("mousedown", start);
+    c.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", end);
+    c.addEventListener("touchstart", start, { passive: false });
+    c.addEventListener("touchmove", move, { passive: false });
+    c.addEventListener("touchend", end, { passive: false });
+
     return () => {
-      c.removeEventListener("mousedown", start); c.removeEventListener("mousemove", move); c.removeEventListener("mouseup", end);
-      c.removeEventListener("touchstart", start); c.removeEventListener("touchmove", move); c.removeEventListener("touchend", end);
+      cancelAnimationFrame(raf);
+      c.removeEventListener("mousedown", start);
+      c.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", end);
+      c.removeEventListener("touchstart", start);
+      c.removeEventListener("touchmove", move);
+      c.removeEventListener("touchend", end);
     };
   }, []);
+
   return (
     <canvas ref={canvasRef}
       style={{ border: "1px dashed #D8D6CF", borderRadius: 8, width: "100%", height: 60, marginBottom: 10, touchAction: "none", display: "block" }} />
@@ -632,7 +683,7 @@ function SupervisorApp({ onBack, sites, setSites }) {
   return (
     <Shell onBack={onBack} title="Supervisor dashboard">
       <div style={{ maxWidth: 980, margin: "0 auto", padding: "0 20px 40px" }}>
-        <div style={{ display: "flex", gap: 8, marginBottom: 16, marginTop: 16 }}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 16, marginTop: 16, overflowX: "auto", paddingBottom: 2 }}>
           <TabBtn active={tab === "dashboard"} onClick={() => setTab("dashboard")}>Live dashboard</TabBtn>
           <TabBtn active={tab === "qr"} onClick={() => setTab("qr")}>Jobsite QR codes</TabBtn>
           <TabBtn active={tab === "workers"} onClick={() => setTab("workers")}>Workers</TabBtn>
@@ -650,7 +701,7 @@ function TabBtn({ active, children, onClick }) {
     <button onClick={onClick} style={{
       padding: "8px 16px", borderRadius: 8, border: "1px solid " + (active ? "#1A1A1A" : "#E5E3DD"),
       background: active ? "#1A1A1A" : "#fff", color: active ? "#fff" : "#1A1A1A",
-      fontSize: 13, fontWeight: 500, cursor: "pointer",
+      fontSize: 13, fontWeight: 500, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0,
     }}>
       {children}
     </button>
@@ -659,6 +710,7 @@ function TabBtn({ active, children, onClick }) {
 
 // ---------- LIVE DASHBOARD ----------
 function Dashboard({ sites }) {
+  const isMobile = useIsMobile();
   const [selectedSiteId, setSelectedSiteId] = useState(sites[0]?.id || FALLBACK_SITE.id);
   const site = sites.find((s) => s.id === selectedSiteId) || sites[0] || FALLBACK_SITE;
   const [roster, setRoster] = useState([]);
@@ -929,30 +981,35 @@ function Dashboard({ sites }) {
 
   return (
     <div>
-      <div style={topbar}>
+      <div style={{ ...topbar, flexDirection: isMobile ? "column" : "row", alignItems: isMobile ? "flex-start" : "center", gap: isMobile ? 12 : 0 }}>
         <div>
           <p style={{ fontSize: 18, fontWeight: 600, margin: 0 }}>
             <Icon name="building" size={16} style={{ verticalAlign: -3, marginRight: 6 }} />
             {site.code} — {site.name}
           </p>
           <p style={{ fontSize: 12, color: "#6B6A66", margin: "4px 0 0" }}>
-            Foreman: {site.foreman || "—"} · {new Date(selectedDate + "T00:00:00").toLocaleDateString([], { weekday: "long", month: "short", day: "numeric", year: "numeric" })}
+            Foreman: {site.foreman || "—"}{site.foreman_phone ? ` (${site.foreman_phone})` : ""}
+            {site.created_at && ` · Created ${new Date(site.created_at).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}`}
+          </p>
+          <p style={{ fontSize: 12, color: "#6B6A66", margin: "2px 0 0" }}>
+            Viewing {new Date(selectedDate + "T00:00:00").toLocaleDateString([], { weekday: "long", month: "short", day: "numeric", year: "numeric" })}
           </p>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", width: isMobile ? "100%" : "auto" }}>
           <select
             value={selectedSiteId}
             onChange={(e) => setSelectedSiteId(e.target.value)}
             style={{
               fontSize: 13, padding: "7px 10px", borderRadius: 8, border: "1px solid #E5E3DD",
               background: "#fff", color: "#1A1A1A", cursor: "pointer",
+              flex: isMobile ? "1 1 100%" : "initial",
             }}
           >
             {sites.map((s) => (
               <option key={s.id} value={s.id}>{s.code} — {s.name}</option>
             ))}
           </select>
-          <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+          <div style={{ position: "relative", display: "flex", alignItems: "center", flex: isMobile ? "1 1 auto" : "initial" }}>
             <Icon name="calendar" size={14} style={{ position: "absolute", left: 10, color: "#9A9893", pointerEvents: "none" }} />
             <input
               type="date"
@@ -961,7 +1018,7 @@ function Dashboard({ sites }) {
               onChange={(e) => setSelectedDate(e.target.value)}
               style={{
                 fontSize: 13, padding: "7px 10px 7px 32px", borderRadius: 8, border: "1px solid #E5E3DD",
-                background: "#fff", color: "#1A1A1A", cursor: "pointer",
+                background: "#fff", color: "#1A1A1A", cursor: "pointer", width: isMobile ? "100%" : "auto",
               }}
             />
           </div>
@@ -978,7 +1035,7 @@ function Dashboard({ sites }) {
           )}
           <button
             onClick={() => { setExportStart(selectedDate); setExportEnd(selectedDate); setExportOpen(true); }}
-            style={{ ...submitBtn, margin: 0, width: "auto", padding: "7px 14px", display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}
+            style={{ ...submitBtn, margin: 0, width: isMobile ? "100%" : "auto", padding: "7px 14px", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, whiteSpace: "nowrap" }}
           >
             <Icon name="download" size={14} />Export
           </button>
@@ -1009,7 +1066,7 @@ function Dashboard({ sites }) {
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,minmax(0,1fr))", gap: 10, marginBottom: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2,minmax(0,1fr))" : "repeat(4,minmax(0,1fr))", gap: 10, marginBottom: 16 }}>
         <Metric label={isToday ? "On site now" : "Still clocked in (no checkout)"} value={onSite} />
         <Metric label="Total workers" value={roster.length} />
         <Metric label="Hours billed" value={fmtHrs(totalHoursToday)} />
@@ -1018,48 +1075,74 @@ function Dashboard({ sites }) {
 
       <SectionHead>{isToday ? "Live roster" : "Roster for this day"}</SectionHead>
       <div style={card}>
-        <div style={{ ...rosterRow, ...rowHeader }}>
-          <div></div><div>Worker</div><div>Status</div><div>Clock in</div><div>Clock out</div><div>Hours</div><div>Flag</div>
-        </div>
+        {!isMobile && (
+          <div style={{ ...rosterRow, ...rowHeader }}>
+            <div></div><div>Worker</div><div>Status</div><div>Clock in</div><div>Clock out</div><div>Hours</div><div>Flag</div>
+          </div>
+        )}
         {loading && <div style={{ padding: "14px 16px", fontSize: 12, color: "#9A9893" }}>Loading roster...</div>}
         {!loading && roster.length === 0 && (
           <div style={{ padding: "14px 16px", fontSize: 12, color: "#9A9893" }}>No punches on this day.</div>
         )}
-        {roster.map((w) => (
-          <div key={w.id} style={rosterRow}>
-            <div style={{ width: 32, height: 32, borderRadius: "50%", background: w.bg, color: w.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700 }}>{w.initials}</div>
-            <div>
-              <p style={{ fontSize: 13, fontWeight: 500, margin: 0 }}>{w.name}</p>
-              <p style={{ fontSize: 11, color: "#9A9893", margin: 0 }}>{w.company || "—"}</p>
-            </div>
-            <div>
-              <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 12, background: w.status === "in" ? "#EAF3DE" : "#F1EFE8", color: w.status === "in" ? "#27500A" : "#6B6A66" }}>
-                {w.status === "in" ? "On site" : "Clocked out"}
-              </span>
-            </div>
-            <div style={{ fontSize: 13 }}>{w.clockIn ? fmtTime(w.clockIn) : "—"}</div>
-            <div style={{ fontSize: 13, color: w.clockOut ? "#1A1A1A" : "#B5B3AD" }}>{w.clockOut ? fmtTime(w.clockOut) : "—"}</div>
-            <div style={{ fontSize: 13 }}>{w.missingClockOut ? "—" : `${fmtHrs(w.totalMs)} hrs`}</div>
-            <div>
-              {w.flag === "geofence" && (
-                <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 12, background: "#FCEBEB", color: "#791F1F", display: "inline-flex", alignItems: "center", gap: 4 }}>
-                  <Icon name="pinOff" size={11} />{w.flagLoc?.flag_reason || "Off jobsite"}
+        {roster.map((w) => {
+          const flagBadge = w.flag === "geofence" ? (
+            <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 12, background: "#FCEBEB", color: "#791F1F", display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <Icon name="pinOff" size={11} />{w.flagLoc?.flag_reason || "Off jobsite"}
+            </span>
+          ) : w.flag === "gps_in" ? (
+            <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 12, background: "#FCEBEB", color: "#791F1F", display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <Icon name="pinOff" size={11} />Off-site GPS
+            </span>
+          ) : w.missingClockOut ? (
+            <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 12, background: "#FAEEDA", color: "#633806", display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <Icon name="alert" size={11} />No clock-out
+            </span>
+          ) : null;
+
+          if (isMobile) {
+            return (
+              <div key={w.id} style={{ padding: "12px 14px", borderBottom: "0.5px solid #F0EEE8" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                  <div style={{ width: 32, height: 32, borderRadius: "50%", background: w.bg, color: w.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, flexShrink: 0 }}>{w.initials}</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <p style={{ fontSize: 13, fontWeight: 500, margin: 0 }}>{w.name}</p>
+                    <p style={{ fontSize: 11, color: "#9A9893", margin: 0 }}>{w.company || "—"}</p>
+                  </div>
+                  <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 12, background: w.status === "in" ? "#EAF3DE" : "#F1EFE8", color: w.status === "in" ? "#27500A" : "#6B6A66", whiteSpace: "nowrap" }}>
+                    {w.status === "in" ? "On site" : "Clocked out"}
+                  </span>
+                </div>
+                <div style={{ display: "flex", gap: 16, fontSize: 12, color: "#6B6A66", flexWrap: "wrap" }}>
+                  <span>In: <strong style={{ color: "#1A1A1A" }}>{w.clockIn ? fmtTime(w.clockIn) : "—"}</strong></span>
+                  <span>Out: <strong style={{ color: w.clockOut ? "#1A1A1A" : "#B5B3AD" }}>{w.clockOut ? fmtTime(w.clockOut) : "—"}</strong></span>
+                  <span>Hours: <strong style={{ color: "#1A1A1A" }}>{w.missingClockOut ? "—" : `${fmtHrs(w.totalMs)} hrs`}</strong></span>
+                </div>
+                {flagBadge && <div style={{ marginTop: 8 }}>{flagBadge}</div>}
+              </div>
+            );
+          }
+
+          return (
+            <div key={w.id} style={rosterRow}>
+              <div style={{ width: 32, height: 32, borderRadius: "50%", background: w.bg, color: w.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700 }}>{w.initials}</div>
+              <div>
+                <p style={{ fontSize: 13, fontWeight: 500, margin: 0 }}>{w.name}</p>
+                <p style={{ fontSize: 11, color: "#9A9893", margin: 0 }}>{w.company || "—"}</p>
+              </div>
+              <div>
+                <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 12, background: w.status === "in" ? "#EAF3DE" : "#F1EFE8", color: w.status === "in" ? "#27500A" : "#6B6A66" }}>
+                  {w.status === "in" ? "On site" : "Clocked out"}
                 </span>
-              )}
-              {w.flag === "gps_in" && (
-                <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 12, background: "#FCEBEB", color: "#791F1F", display: "inline-flex", alignItems: "center", gap: 4 }}>
-                  <Icon name="pinOff" size={11} />Off-site GPS
-                </span>
-              )}
-              {w.missingClockOut && (
-                <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 12, background: "#FAEEDA", color: "#633806", display: "inline-flex", alignItems: "center", gap: 4 }}>
-                  <Icon name="alert" size={11} />No clock-out
-                </span>
-              )}
-              {!w.flag && !w.missingClockOut && <span style={{ fontSize: 12, color: "#D8D6CF" }}>—</span>}
+              </div>
+              <div style={{ fontSize: 13 }}>{w.clockIn ? fmtTime(w.clockIn) : "—"}</div>
+              <div style={{ fontSize: 13, color: w.clockOut ? "#1A1A1A" : "#B5B3AD" }}>{w.clockOut ? fmtTime(w.clockOut) : "—"}</div>
+              <div style={{ fontSize: 13 }}>{w.missingClockOut ? "—" : `${fmtHrs(w.totalMs)} hrs`}</div>
+              <div>
+                {flagBadge || <span style={{ fontSize: 12, color: "#D8D6CF" }}>—</span>}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <SectionHead>Flags &amp; alerts</SectionHead>
@@ -1123,10 +1206,28 @@ function SectionHead({ children }) {
 
 // ---------- QR SECTION ----------
 function QRSection({ sites, setSites }) {
+  const isMobile = useIsMobile();
   const [name, setName] = useState("");
   const [address, setAddress] = useState("");
+  const [foremanName, setForemanName] = useState("");
+  const [foremanPhone, setForemanPhone] = useState("");
+  const [foremen, setForemen] = useState([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    supabase.from("foremen").select("*").order("name", { ascending: true }).then(({ data, error }) => {
+      if (!error && data) setForemen(data);
+    });
+  }, []);
+
+  // When the foreman name matches a known foreman exactly, auto-fill
+  // their saved phone number.
+  function handleForemanNameChange(val) {
+    setForemanName(val);
+    const match = foremen.find((f) => f.name.toLowerCase() === val.trim().toLowerCase());
+    if (match && match.phone) setForemanPhone(match.phone);
+  }
 
   // Geocode an address to lat/lng using OpenStreetMap's free Nominatim API
   async function geocode(addr) {
@@ -1157,14 +1258,35 @@ function QRSection({ sites, setSites }) {
       id, name: name.trim(), code: `Site #${sites.length + 1}`,
       lat: geo.lat, lng: geo.lng,
       address: geo.display,
-      foreman: null,
+      foreman: foremanName.trim() || null,
+      foreman_phone: foremanPhone.trim() || null,
+      created_at: new Date().toISOString(),
     };
     const { error: insErr } = await supabase.from("sites").insert(newSite);
     setBusy(false);
     if (!insErr) {
       setSites([...sites, newSite]);
+
+      // Save/update the foreman lookup so name+phone are remembered
+      // for next time, without blocking on the result.
+      if (foremanName.trim()) {
+        supabase.from("foremen")
+          .upsert({ name: foremanName.trim(), phone: foremanPhone.trim() || null }, { onConflict: "name" })
+          .then(({ error: fErr }) => {
+            if (!fErr) {
+              setForemen((prev) => {
+                const existing = prev.find((f) => f.name.toLowerCase() === foremanName.trim().toLowerCase());
+                if (existing) return prev.map((f) => f === existing ? { ...f, phone: foremanPhone.trim() || null } : f);
+                return [...prev, { name: foremanName.trim(), phone: foremanPhone.trim() || null }];
+              });
+            }
+          });
+      }
+
       setName("");
       setAddress("");
+      setForemanName("");
+      setForemanPhone("");
     } else {
       setError("Couldn't save the jobsite. Try again.");
     }
@@ -1183,17 +1305,75 @@ function QRSection({ sites, setSites }) {
     }
   }
 
+  // Refs to each site's QR canvas, so we can grab the image for printing
+  const qrRefs = useRef({});
+
+  function printQR(site, url) {
+    const canvas = qrRefs.current[site.id];
+    if (!canvas) return;
+    const dataUrl = canvas.toDataURL("image/png");
+    const win = window.open("", "_blank");
+    if (!win) return;
+    win.document.write(`
+      <html>
+        <head>
+          <title>${site.code} — ${site.name}</title>
+          <style>
+            body { font-family: -apple-system, Helvetica, Arial, sans-serif; text-align: center; padding: 40px; }
+            img { width: 320px; height: 320px; margin-bottom: 20px; }
+            h1 { font-size: 22px; margin: 0 0 4px; }
+            p { font-size: 13px; color: #555; margin: 4px 0; }
+            .url { font-size: 11px; color: #999; word-break: break-all; margin-top: 10px; }
+          </style>
+        </head>
+        <body>
+          <img src="${dataUrl}" />
+          <h1>${site.code} — ${site.name}</h1>
+          ${site.address ? `<p>${site.address}</p>` : ""}
+          <p>Scan to clock in / out</p>
+          <p class="url">${url}</p>
+          <script>window.onload = () => { window.print(); }</script>
+        </body>
+      </html>
+    `);
+    win.document.close();
+  }
+
   return (
     <div>
       <SectionHead>Generate a new jobsite code</SectionHead>
       <div style={{ ...card, padding: "14px 16px", marginBottom: 20 }}>
-        <div style={{ display: "flex", gap: 8, marginBottom: error ? 8 : 0 }}>
+        <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", gap: 8, marginBottom: 8 }}>
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Jobsite name (e.g. Maple St Renovation)"
             style={{ ...inputStyle, marginBottom: 0, flex: 1 }} onKeyDown={(e) => e.key === "Enter" && addSite()} />
           <input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Street address, city, state"
             style={{ ...inputStyle, marginBottom: 0, flex: 1 }} onKeyDown={(e) => e.key === "Enter" && addSite()} />
-          <button onClick={addSite} disabled={busy} style={{ ...submitBtn, marginTop: 0, width: 140 }}>{busy ? "Locating..." : "Create code"}</button>
         </div>
+        <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", gap: 8, marginBottom: error ? 8 : 0 }}>
+          <input
+            value={foremanName}
+            onChange={(e) => handleForemanNameChange(e.target.value)}
+            placeholder="Foreman name"
+            list="foremen-list"
+            style={{ ...inputStyle, marginBottom: 0, flex: 1 }}
+            onKeyDown={(e) => e.key === "Enter" && addSite()}
+          />
+          <datalist id="foremen-list">
+            {foremen.map((f) => <option key={f.name} value={f.name} />)}
+          </datalist>
+          <input
+            value={foremanPhone}
+            onChange={(e) => setForemanPhone(e.target.value)}
+            placeholder="Foreman phone number"
+            type="tel"
+            style={{ ...inputStyle, marginBottom: 0, flex: 1 }}
+            onKeyDown={(e) => e.key === "Enter" && addSite()}
+          />
+          <button onClick={addSite} disabled={busy} style={{ ...submitBtn, marginTop: 0, width: isMobile ? "100%" : 140 }}>{busy ? "Locating..." : "Create code"}</button>
+        </div>
+        <p style={{ fontSize: 11, color: "#9A9893", margin: "8px 0 0" }}>
+          Foreman name + phone are remembered — start typing a name you've used before to auto-fill their number.
+        </p>
         {error && <p style={{ fontSize: 11, color: "#A32D2D", margin: "8px 0 0" }}>{error}</p>}
       </div>
 
@@ -1215,11 +1395,26 @@ function QRSection({ sites, setSites }) {
               >
                 <Icon name="x" size={13} />
               </button>
-              <QRCode value={url} size={160} />
+              <QRCode ref={(el) => { qrRefs.current[s.id] = el; }} value={url} size={160} />
               <p style={{ fontSize: 13, fontWeight: 600, margin: "10px 0 2px" }}>{s.code} — {s.name}</p>
               {s.address && <p style={{ fontSize: 11, color: "#6B6A66", margin: "0 0 6px" }}>{s.address}</p>}
+              {s.foreman && (
+                <p style={{ fontSize: 11, color: "#6B6A66", margin: "0 0 6px" }}>
+                  Foreman: {s.foreman}{s.foreman_phone ? ` · ${s.foreman_phone}` : ""}
+                </p>
+              )}
               <p style={{ fontSize: 11, color: "#9A9893", margin: "0 0 8px", wordBreak: "break-all" }}>{url}</p>
-              <p style={{ fontSize: 11, color: "#9A9893", margin: 0 }}>Print, laminate, and post at site entrance. Each scan checks the worker in automatically.</p>
+              <p style={{ fontSize: 11, color: "#9A9893", margin: "0 0 12px" }}>Print, laminate, and post at site entrance. Each scan checks the worker in automatically.</p>
+              <button
+                onClick={() => printQR(s, url)}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 500,
+                  padding: "7px 14px", borderRadius: 8, border: "1px solid #E5E3DD", background: "#fff",
+                  color: "#1A1A1A", cursor: "pointer",
+                }}
+              >
+                <Icon name="printer" size={13} />Print QR code
+              </button>
 
               {confirming && (
                 <div style={{ marginTop: 12, padding: "10px 12px", background: "#FCEBEB", borderRadius: 8, textAlign: "left" }}>
