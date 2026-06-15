@@ -219,7 +219,11 @@ function WorkerApp({ onBack, siteId, sites }) {
   const [error, setError] = useState("");
   const [signupForm, setSignupForm] = useState({ name: "", company: "", phone: "", pin: "" });
   const [gps, setGps] = useState(null);
+  const gpsRef = useRef(null);
+  useEffect(() => { gpsRef.current = gps; }, [gps]);
   const [gpsStatus, setGpsStatus] = useState("locating"); // locating | locked | denied
+  const gpsStatusRef = useRef("locating");
+  useEffect(() => { gpsStatusRef.current = gpsStatus; }, [gpsStatus]);
   const [clockInTime, setClockInTime] = useState(null);
   const [openPunchId, setOpenPunchId] = useState(null);
   const [now, setNow] = useState(Date.now());
@@ -238,6 +242,16 @@ function WorkerApp({ onBack, siteId, sites }) {
       { enableHighAccuracy: true, timeout: 8000 }
     );
   }, []);
+
+  // Wait briefly for GPS to resolve before clocking in, so the geofence
+  // check on clock-in has real coordinates instead of nulls. Falls back
+  // after ~6s if GPS is slow/unavailable so the worker isn't stuck.
+  async function waitForGps(maxMs = 6000) {
+    const start = Date.now();
+    while (gpsStatusRef.current === "locating" && Date.now() - start < maxMs) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
 
   // Once we know who the worker is, check whether they already have
   // an open (un-clocked-out) punch for this site — if so, skip
@@ -325,17 +339,19 @@ function WorkerApp({ onBack, siteId, sites }) {
 
   // GPS coordinates to attach to a punch, with geofence flag check
   function currentGpsPayload() {
-    if (!gps) return { lat: null, lng: null, gps_accuracy: null, flagged: false, flag_reason: null };
-    const d = distFeet(site.lat, site.lng, gps.lat, gps.lng);
+    const g = gpsRef.current;
+    if (!g) return { lat: null, lng: null, gps_accuracy: null, flagged: false, flag_reason: null };
+    const d = distFeet(site.lat, site.lng, g.lat, g.lng);
     const flagged = d > GEOFENCE_RADIUS_FT;
     return {
-      lat: gps.lat, lng: gps.lng, gps_accuracy: gps.accuracy,
+      lat: g.lat, lng: g.lng, gps_accuracy: g.accuracy,
       flagged, flag_reason: flagged ? `Clocked in ${Math.round(d)} ft from jobsite` : null,
     };
   }
 
   async function doClockIn(w) {
     setBusy(true);
+    await waitForGps();
     const payload = currentGpsPayload();
     const { data, error: insErr } = await supabase
       .from("punch_events")
@@ -352,6 +368,7 @@ function WorkerApp({ onBack, siteId, sites }) {
 
   async function doClockOut() {
     setBusy(true);
+    await waitForGps();
     const payload = currentGpsPayload();
     await supabase.from("punch_events").insert({
       worker_id: worker.id, site_id: site.id, type: "clock_out", ...payload,
@@ -713,7 +730,7 @@ function Dashboard({ sites }) {
   const isMobile = useIsMobile();
   const [selectedSiteId, setSelectedSiteId] = useState(sites[0]?.id || FALLBACK_SITE.id);
   const site = sites.find((s) => s.id === selectedSiteId) || sites[0] || FALLBACK_SITE;
-  const [roster, setRoster] = useState([]);
+  const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [tick, setTick] = useState(Date.now());
 
@@ -732,15 +749,17 @@ function Dashboard({ sites }) {
     }
   }, [sites]);
 
-  // Build roster: for each worker, pair the selected day's clock_in/clock_out
-  // events into shifts. A worker can have multiple shifts in a day if they
-  // left and came back; we show the most recent shift as their current status.
-  async function loadRoster() {
+  // Fetch raw punch events for the selected site + day from Supabase.
+  // This is the only function that hits the database -- the roster rows
+  // themselves are derived from this data client-side (see useMemo below),
+  // so the live "hours so far" counter can tick every few seconds without
+  // re-querying the database each time.
+  async function loadEvents() {
     setLoading(true);
     const dayStart = new Date(selectedDate + "T00:00:00");
     const dayEnd = new Date(selectedDate + "T23:59:59.999");
 
-    const { data: events, error } = await supabase
+    const { data, error } = await supabase
       .from("punch_events")
       .select("*, workers(*)")
       .eq("site_id", site.id)
@@ -748,8 +767,19 @@ function Dashboard({ sites }) {
       .lte("timestamp", dayEnd.toISOString())
       .order("timestamp", { ascending: true });
 
-    if (error || !events) { setLoading(false); return; }
+    if (!error && data) setEvents(data);
+    setLoading(false);
+  }
 
+  useEffect(() => {
+    loadEvents();
+  }, [site.id, selectedDate]);
+
+  // Build roster: for each worker, pair the selected day's clock_in/clock_out
+  // events into shifts. A worker can have multiple shifts in a day if they
+  // left and came back. Recomputed whenever events, tick, or isToday change
+  // -- this is pure client-side math, no network call.
+  const roster = React.useMemo(() => {
     // group by worker
     const byWorker = {};
     for (const ev of events) {
@@ -763,8 +793,9 @@ function Dashboard({ sites }) {
       // pair clock_in/clock_out sequentially to compute total ms worked that day
       let totalMs = 0;
       let openClockIn = null;
-      let lastClockIn = null;
+      let firstClockIn = null;
       let lastClockOut = null;
+      let shiftCount = 0;
       let activeFlag = null;
       let activeFlagLoc = null;
 
@@ -772,12 +803,13 @@ function Dashboard({ sites }) {
         const t = new Date(ev.timestamp).getTime();
         if (ev.type === "clock_in") {
           openClockIn = ev;
-          lastClockIn = ev;
+          if (!firstClockIn) firstClockIn = ev;
           if (ev.flagged) { activeFlag = "gps_in"; activeFlagLoc = ev; }
         } else if (ev.type === "clock_out" && openClockIn) {
           totalMs += t - new Date(openClockIn.timestamp).getTime();
           openClockIn = null;
           lastClockOut = ev;
+          shiftCount += 1;
         }
       }
 
@@ -804,8 +836,13 @@ function Dashboard({ sites }) {
         color: worker.color,
         bg: worker.bg,
         status: stillOpen ? "in" : "out",
-        clockIn: lastClockIn ? new Date(lastClockIn.timestamp) : null,
+        // Show the FIRST clock-in of the day (when they arrived) and the
+        // LAST clock-out (most recent departure), since "Hours" is a sum
+        // across all shifts -- showing only the latest shift's times next
+        // to a multi-shift total would be misleading.
+        clockIn: firstClockIn ? new Date(firstClockIn.timestamp) : null,
         clockOut: lastClockOut ? new Date(lastClockOut.timestamp) : null,
+        shiftCount: shiftCount + (stillOpen ? 1 : 0),
         totalMs,
         flag: activeFlag,
         flagLoc: activeFlagLoc,
@@ -819,13 +856,8 @@ function Dashboard({ sites }) {
       return (a.clockIn?.getTime() || 0) - (b.clockIn?.getTime() || 0);
     });
 
-    setRoster(rows);
-    setLoading(false);
-  }
-
-  useEffect(() => {
-    loadRoster();
-  }, [site.id, selectedDate]);
+    return rows;
+  }, [events, tick, isToday]);
 
   // ---- Export to CSV ----
   const [exportOpen, setExportOpen] = useState(false);
@@ -951,25 +983,23 @@ function Dashboard({ sites }) {
     setExportOpen(false);
   }
 
-  // Live tick: only relevant when viewing today
+  // Live tick: drives the "hours so far" display for today's open shifts.
+  // This does NOT hit the database -- it just forces the useMemo above to
+  // recompute totalMs for anyone currently clocked in.
   useEffect(() => {
     if (!isToday) return;
     const t = setInterval(() => setTick(Date.now()), 5000);
     return () => clearInterval(t);
   }, [isToday]);
 
-  useEffect(() => {
-    if (isToday) loadRoster();
-  }, [tick]);
-
-  // realtime: refresh roster whenever a punch event changes for this site,
+  // realtime: refetch events whenever a punch event changes for this site,
   // but only when viewing today (historical views shouldn't shift under you)
   useEffect(() => {
     if (!isToday) return;
     const channel = supabase
       .channel("punch_events_" + site.id)
       .on("postgres_changes", { event: "*", schema: "public", table: "punch_events", filter: `site_id=eq.${site.id}` }, () => {
-        loadRoster();
+        loadEvents();
       })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
@@ -1116,6 +1146,7 @@ function Dashboard({ sites }) {
                   <span>In: <strong style={{ color: "#1A1A1A" }}>{w.clockIn ? fmtTime(w.clockIn) : "—"}</strong></span>
                   <span>Out: <strong style={{ color: w.clockOut ? "#1A1A1A" : "#B5B3AD" }}>{w.clockOut ? fmtTime(w.clockOut) : "—"}</strong></span>
                   <span>Hours: <strong style={{ color: "#1A1A1A" }}>{w.missingClockOut ? "—" : `${fmtHrs(w.totalMs)} hrs`}</strong></span>
+                  {w.shiftCount > 1 && <span style={{ color: "#9A9893" }}>{w.shiftCount} shifts</span>}
                 </div>
                 {flagBadge && <div style={{ marginTop: 8 }}>{flagBadge}</div>}
               </div>
@@ -1136,7 +1167,10 @@ function Dashboard({ sites }) {
               </div>
               <div style={{ fontSize: 13 }}>{w.clockIn ? fmtTime(w.clockIn) : "—"}</div>
               <div style={{ fontSize: 13, color: w.clockOut ? "#1A1A1A" : "#B5B3AD" }}>{w.clockOut ? fmtTime(w.clockOut) : "—"}</div>
-              <div style={{ fontSize: 13 }}>{w.missingClockOut ? "—" : `${fmtHrs(w.totalMs)} hrs`}</div>
+              <div style={{ fontSize: 13 }}>
+                {w.missingClockOut ? "—" : `${fmtHrs(w.totalMs)} hrs`}
+                {w.shiftCount > 1 && <span style={{ color: "#9A9893", fontSize: 11 }}> ({w.shiftCount})</span>}
+              </div>
               <div>
                 {flagBadge || <span style={{ fontSize: 12, color: "#D8D6CF" }}>—</span>}
               </div>
