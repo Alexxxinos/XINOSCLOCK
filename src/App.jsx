@@ -1197,6 +1197,8 @@ function WorkersSection() {
   const [loading, setLoading] = useState(true);
   const [revealedId, setRevealedId] = useState(null);
   const [search, setSearch] = useState("");
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
 
   useEffect(() => {
     supabase.from("workers").select("*").order("name", { ascending: true }).then(({ data, error }) => {
@@ -1210,6 +1212,16 @@ function WorkersSection() {
     (w.company || "").toLowerCase().includes(search.toLowerCase())
   );
 
+  async function deleteWorker(id) {
+    setDeletingId(id);
+    const { error } = await supabase.from("workers").delete().eq("id", id);
+    setDeletingId(null);
+    setConfirmDeleteId(null);
+    if (!error) {
+      setWorkers(workers.filter((w) => w.id !== id));
+    }
+  }
+
   return (
     <div>
       <SectionHead>All workers</SectionHead>
@@ -1220,32 +1232,67 @@ function WorkersSection() {
 
       <div style={card}>
         <div style={{ ...workerRow, ...rowHeader }}>
-          <div></div><div>Name</div><div>Company</div><div>PIN</div>
+          <div></div><div>Name</div><div>Company</div><div>PIN</div><div></div>
         </div>
         {loading && <div style={{ padding: "14px 16px", fontSize: 12, color: "#9A9893" }}>Loading...</div>}
         {!loading && filtered.length === 0 && (
           <div style={{ padding: "14px 16px", fontSize: 12, color: "#9A9893" }}>No workers found.</div>
         )}
-        {filtered.map((w) => (
-          <div key={w.id} style={workerRow}>
-            <div style={{ width: 32, height: 32, borderRadius: "50%", background: w.bg, color: w.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700 }}>{w.initials}</div>
-            <div style={{ fontSize: 13, fontWeight: 500 }}>{w.name}</div>
-            <div style={{ fontSize: 13, color: "#6B6A66" }}>{w.company || "—"}</div>
-            <div>
-              <button
-                onClick={() => setRevealedId(revealedId === w.id ? null : w.id)}
-                style={{
-                  fontSize: 13, fontFamily: "monospace", border: "none", background: "transparent",
-                  color: revealedId === w.id ? "#1A1A1A" : "#9A9893", cursor: "pointer", padding: "2px 6px",
-                  borderRadius: 6, display: "flex", alignItems: "center", gap: 6,
-                }}
-              >
-                {revealedId === w.id ? w.pin : "••••"}
-                <Icon name="lock" size={12} />
-              </button>
+        {filtered.map((w) => {
+          const confirming = confirmDeleteId === w.id;
+          return (
+            <div key={w.id}>
+              <div style={workerRow}>
+                <div style={{ width: 32, height: 32, borderRadius: "50%", background: w.bg, color: w.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700 }}>{w.initials}</div>
+                <div style={{ fontSize: 13, fontWeight: 500 }}>{w.name}</div>
+                <div style={{ fontSize: 13, color: "#6B6A66" }}>{w.company || "—"}</div>
+                <div>
+                  <button
+                    onClick={() => setRevealedId(revealedId === w.id ? null : w.id)}
+                    style={{
+                      fontSize: 13, fontFamily: "monospace", border: "none", background: "transparent",
+                      color: revealedId === w.id ? "#1A1A1A" : "#9A9893", cursor: "pointer", padding: "2px 6px",
+                      borderRadius: 6, display: "flex", alignItems: "center", gap: 6,
+                    }}
+                  >
+                    {revealedId === w.id ? w.pin : "••••"}
+                    <Icon name="lock" size={12} />
+                  </button>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <button
+                    onClick={() => setConfirmDeleteId(confirming ? null : w.id)}
+                    title="Remove worker"
+                    style={{
+                      width: 26, height: 26, borderRadius: 8, border: "1px solid #E5E3DD", background: "#fff",
+                      color: "#9A9893", display: "inline-flex", alignItems: "center", justifyContent: "center",
+                      cursor: "pointer", padding: 0,
+                    }}
+                  >
+                    <Icon name="x" size={13} />
+                  </button>
+                </div>
+              </div>
+              {confirming && (
+                <div style={{ padding: "10px 14px", background: "#FCEBEB", borderBottom: "0.5px solid #F0EEE8" }}>
+                  <p style={{ fontSize: 12, color: "#791F1F", margin: "0 0 8px" }}>
+                    Remove {w.name} from the system? Their existing punch history will remain in the database, but they won't be able to sign in again unless they create a new account.
+                  </p>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button onClick={() => deleteWorker(w.id)} disabled={deletingId === w.id}
+                      style={{ padding: "7px 14px", borderRadius: 8, border: "none", background: "#A32D2D", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                      {deletingId === w.id ? "Removing..." : "Remove worker"}
+                    </button>
+                    <button onClick={() => setConfirmDeleteId(null)}
+                      style={{ padding: "7px 14px", borderRadius: 8, border: "1px solid #E5E3DD", background: "#fff", color: "#1A1A1A", fontSize: 12, cursor: "pointer" }}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       <p style={{ fontSize: 11, color: "#9A9893", marginTop: 10 }}>Click a PIN to reveal it. Workers use their name + PIN to sign in on the jobsite QR scan.</p>
     </div>
@@ -1282,4 +1329,4 @@ const card = { background: "#fff", border: "1px solid #E5E3DD", borderRadius: 12
 const rosterRow = { display: "grid", gridTemplateColumns: "32px 1.6fr 90px 80px 80px 90px 130px", alignItems: "center", gap: 10, padding: "10px 14px", borderBottom: "0.5px solid #F0EEE8" };
 const hoursRow = { display: "grid", gridTemplateColumns: "1.6fr 90px 90px", alignItems: "center", gap: 10, padding: "9px 14px", borderBottom: "0.5px solid #F0EEE8" };
 const rowHeader = { background: "#FAFAF8", fontSize: 11, color: "#9A9893", fontWeight: 600, borderBottom: "0.5px solid #E5E3DD" };
-const workerRow = { display: "grid", gridTemplateColumns: "32px 1.6fr 1fr 100px", alignItems: "center", gap: 10, padding: "10px 14px", borderBottom: "0.5px solid #F0EEE8" };
+const workerRow = { display: "grid", gridTemplateColumns: "32px 1.6fr 1fr 100px 50px", alignItems: "center", gap: 10, padding: "10px 14px", borderBottom: "0.5px solid #F0EEE8" };
