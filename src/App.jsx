@@ -1310,11 +1310,26 @@ function QRSection({ sites, setSites }) {
 
   function printQR(site, url) {
     const canvas = qrRefs.current[site.id];
-    if (!canvas) return;
+    if (!canvas) {
+      alert("QR code isn't ready yet — wait a moment and try again.");
+      return;
+    }
     const dataUrl = canvas.toDataURL("image/png");
-    const win = window.open("", "_blank");
-    if (!win) return;
-    win.document.write(`
+
+    // Print via a hidden iframe instead of window.open, which avoids
+    // popup blockers entirely since no new window/tab is created.
+    const iframe = document.createElement("iframe");
+    iframe.style.position = "fixed";
+    iframe.style.right = "0";
+    iframe.style.bottom = "0";
+    iframe.style.width = "0";
+    iframe.style.height = "0";
+    iframe.style.border = "0";
+    document.body.appendChild(iframe);
+
+    const doc = iframe.contentWindow.document;
+    doc.open();
+    doc.write(`
       <html>
         <head>
           <title>${site.code} — ${site.name}</title>
@@ -1330,13 +1345,21 @@ function QRSection({ sites, setSites }) {
           <img src="${dataUrl}" />
           <h1>${site.code} — ${site.name}</h1>
           ${site.address ? `<p>${site.address}</p>` : ""}
+          ${site.foreman ? `<p>Foreman: ${site.foreman}${site.foreman_phone ? " · " + site.foreman_phone : ""}</p>` : ""}
           <p>Scan to clock in / out</p>
           <p class="url">${url}</p>
-          <script>window.onload = () => { window.print(); }</script>
         </body>
       </html>
     `);
-    win.document.close();
+    doc.close();
+
+    // Give the image a moment to render before printing
+    setTimeout(() => {
+      iframe.contentWindow.focus();
+      iframe.contentWindow.print();
+      // Clean up the iframe after printing
+      setTimeout(() => document.body.removeChild(iframe), 1000);
+    }, 300);
   }
 
   return (
