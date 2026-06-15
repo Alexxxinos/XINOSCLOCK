@@ -620,16 +620,15 @@ function WorkerApp({ onBack, siteId, sites }) {
     <Shell onBack={onBack} title="Worker punch">
       <div style={{ display: "flex", justifyContent: "center", padding: "20px 0" }}>
         <div style={{ width: 320 }}>
-          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+          <div style={{ display: "flex", justifyContent: "center", marginBottom: 16 }}>
             <button onClick={toggleLang} style={{
-              fontSize: 12, padding: "5px 12px", borderRadius: 8, border: "1px solid #E5E3DD",
-              background: "#fff", color: "#1A1A1A", cursor: "pointer", display: "flex", alignItems: "center", gap: 5,
+              fontSize: 15, padding: "10px 22px", borderRadius: 10, border: "1px solid #E5E3DD",
+              background: "#fff", color: "#1A1A1A", cursor: "pointer", display: "flex", alignItems: "center", gap: 8, fontWeight: 500,
             }}>
-              <Icon name="globe" size={13} />{t.languageToggle}
+              <Icon name="globe" size={17} />{t.languageToggle}
             </button>
           </div>
           <div style={phoneStyle}>
-          <div style={statusBar}><span>9:41</span><span>LTE</span></div>
 
           {stage === "loading" && (
             <div style={{ ...screenPad, textAlign: "center", paddingTop: 60 }}>
