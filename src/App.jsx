@@ -985,12 +985,32 @@ function Dashboard({ sites }) {
 
   // Live tick: drives the "hours so far" display for today's open shifts.
   // This does NOT hit the database -- it just forces the useMemo above to
-  // recompute totalMs for anyone currently clocked in. 30s is frequent
-  // enough for an hours counter and avoids excessive re-renders.
+  // recompute totalMs for anyone currently clocked in.
+  //
+  // Refresh rate adapts to the time of day: fast during typical
+  // clock-in/clock-out windows when activity is highest, slower midday
+  // and overnight when little is changing.
+  //   6am-9am, 3pm-7pm  -> every 10s  (shift start/end rush)
+  //   9am-3pm           -> every 30s  (steady work hours)
+  //   7pm-6am           -> every 2min (overnight, rarely active)
+  function getRefreshIntervalMs() {
+    const hour = new Date().getHours();
+    if ((hour >= 6 && hour < 9) || (hour >= 15 && hour < 19)) return 10000;
+    if (hour >= 9 && hour < 15) return 30000;
+    return 120000;
+  }
+
   useEffect(() => {
     if (!isToday) return;
-    const t = setInterval(() => setTick(Date.now()), 30000);
-    return () => clearInterval(t);
+    let timer;
+    function schedule() {
+      timer = setTimeout(() => {
+        setTick(Date.now());
+        schedule(); // re-evaluate interval each time, in case the hour bucket changed
+      }, getRefreshIntervalMs());
+    }
+    schedule();
+    return () => clearTimeout(timer);
   }, [isToday]);
 
   // realtime: refetch events whenever a punch event changes for this site,
