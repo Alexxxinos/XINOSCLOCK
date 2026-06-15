@@ -285,7 +285,7 @@ function WorkerApp({ onBack, siteId, sites }) {
   const onSiteStages = ["sign_in", "checked_in", "clockedin"];
   useEffect(() => {
     if (!onSiteStages.includes(stage)) return;
-    const t = setInterval(() => setNow(Date.now()), 1000);
+    const t = setInterval(() => setNow(Date.now()), 30000);
     let watchId;
     if (navigator.geolocation) {
       watchId = navigator.geolocation.watchPosition(
@@ -985,10 +985,11 @@ function Dashboard({ sites }) {
 
   // Live tick: drives the "hours so far" display for today's open shifts.
   // This does NOT hit the database -- it just forces the useMemo above to
-  // recompute totalMs for anyone currently clocked in.
+  // recompute totalMs for anyone currently clocked in. 30s is frequent
+  // enough for an hours counter and avoids excessive re-renders.
   useEffect(() => {
     if (!isToday) return;
-    const t = setInterval(() => setTick(Date.now()), 5000);
+    const t = setInterval(() => setTick(Date.now()), 30000);
     return () => clearInterval(t);
   }, [isToday]);
 
