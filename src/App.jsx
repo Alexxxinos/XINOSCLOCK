@@ -60,6 +60,7 @@ const Icon = ({ name, size = 16, style }) => {
     users: "M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75",
     clock: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM12 6v6l4 2",
     x: "M18 6 6 18M6 6l12 12",
+    calendar: "M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z",
   };
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -214,7 +215,7 @@ function WorkerApp({ onBack, siteId, sites }) {
       setOpenPunchId(last.id);
       setStage("clockedin");
     } else {
-      doClockIn(w);
+      await doClockIn(w);
     }
   }
 
@@ -268,7 +269,7 @@ function WorkerApp({ onBack, siteId, sites }) {
     }
     const found = data[0];
     setWorker(found);
-    checkOpenPunch(found);
+    await checkOpenPunch(found);
   }
 
   // GPS coordinates to attach to a punch, with geofence flag check
@@ -291,7 +292,7 @@ function WorkerApp({ onBack, siteId, sites }) {
       .select()
       .single();
     setBusy(false);
-    if (insErr) { setError("Couldn't save your clock-in. Try again."); return; }
+    if (insErr) { setError("Couldn't save your clock-in: " + insErr.message); return; }
     setClockInTime(new Date(data.timestamp).getTime());
     setOpenPunchId(data.id);
     setStage("sign_in");
@@ -605,6 +606,14 @@ function Dashboard({ sites }) {
   const [loading, setLoading] = useState(true);
   const [tick, setTick] = useState(Date.now());
 
+  // Date being viewed, as a YYYY-MM-DD string (defaults to today)
+  const [selectedDate, setSelectedDate] = useState(() => {
+    const d = new Date();
+    return d.toISOString().slice(0, 10);
+  });
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const isToday = selectedDate === todayStr;
+
   // Once real sites load, default to the first one if nothing selected yet
   useEffect(() => {
     if (sites.length && !sites.find((s) => s.id === selectedSiteId)) {
@@ -612,18 +621,20 @@ function Dashboard({ sites }) {
     }
   }, [sites]);
 
-  // Build roster: for each worker, pair today's clock_in/clock_out events
-  // into shifts. A worker can have multiple shifts in a day if they left
-  // and came back; we show the most recent shift as their current status.
+  // Build roster: for each worker, pair the selected day's clock_in/clock_out
+  // events into shifts. A worker can have multiple shifts in a day if they
+  // left and came back; we show the most recent shift as their current status.
   async function loadRoster() {
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
+    setLoading(true);
+    const dayStart = new Date(selectedDate + "T00:00:00");
+    const dayEnd = new Date(selectedDate + "T23:59:59.999");
 
     const { data: events, error } = await supabase
       .from("punch_events")
       .select("*, workers(*)")
       .eq("site_id", site.id)
-      .gte("timestamp", startOfDay.toISOString())
+      .gte("timestamp", dayStart.toISOString())
+      .lte("timestamp", dayEnd.toISOString())
       .order("timestamp", { ascending: true });
 
     if (error || !events) { setLoading(false); return; }
@@ -638,7 +649,7 @@ function Dashboard({ sites }) {
     }
 
     const rows = Object.values(byWorker).map(({ worker, events }) => {
-      // pair clock_in/clock_out sequentially to compute total ms worked today
+      // pair clock_in/clock_out sequentially to compute total ms worked that day
       let totalMs = 0;
       let openClockIn = null;
       let lastClockIn = null;
@@ -661,8 +672,12 @@ function Dashboard({ sites }) {
 
       const stillOpen = !!openClockIn;
       if (stillOpen) {
-        totalMs += tick - new Date(openClockIn.timestamp).getTime();
-        // check the latest punch event for a live geofence flag
+        // Only count "still running" time for today. For past days with no
+        // clock-out, we don't know when they stopped, so just show the
+        // time up to clock-in (0) and flag it as missing a clock-out.
+        if (isToday) {
+          totalMs += tick - new Date(openClockIn.timestamp).getTime();
+        }
         const latest = events[events.length - 1];
         if (latest.flagged && latest.type === "clock_in") {
           activeFlag = "geofence";
@@ -683,6 +698,7 @@ function Dashboard({ sites }) {
         totalMs,
         flag: activeFlag,
         flagLoc: activeFlagLoc,
+        missingClockOut: stillOpen && !isToday,
       };
     });
 
@@ -698,16 +714,23 @@ function Dashboard({ sites }) {
 
   useEffect(() => {
     loadRoster();
+  }, [site.id, selectedDate]);
+
+  // Live tick: only relevant when viewing today
+  useEffect(() => {
+    if (!isToday) return;
     const t = setInterval(() => setTick(Date.now()), 5000);
     return () => clearInterval(t);
-  }, [site.id]);
+  }, [isToday]);
 
   useEffect(() => {
-    loadRoster();
+    if (isToday) loadRoster();
   }, [tick]);
 
-  // realtime: refresh roster whenever a punch event changes for this site
+  // realtime: refresh roster whenever a punch event changes for this site,
+  // but only when viewing today (historical views shouldn't shift under you)
   useEffect(() => {
+    if (!isToday) return;
     const channel = supabase
       .channel("punch_events_" + site.id)
       .on("postgres_changes", { event: "*", schema: "public", table: "punch_events", filter: `site_id=eq.${site.id}` }, () => {
@@ -715,7 +738,7 @@ function Dashboard({ sites }) {
       })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [site.id]);
+  }, [site.id, isToday]);
 
   const onSite = roster.filter((w) => w.status === "in").length;
   const totalHoursToday = roster.reduce((sum, w) => sum + w.totalMs, 0);
@@ -730,7 +753,7 @@ function Dashboard({ sites }) {
             {site.code} — {site.name}
           </p>
           <p style={{ fontSize: 12, color: "#6B6A66", margin: "4px 0 0" }}>
-            Foreman: {site.foreman || "—"} · {new Date().toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })}
+            Foreman: {site.foreman || "—"} · {new Date(selectedDate + "T00:00:00").toLocaleDateString([], { weekday: "long", month: "short", day: "numeric", year: "numeric" })}
           </p>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -746,28 +769,48 @@ function Dashboard({ sites }) {
               <option key={s.id} value={s.id}>{s.code} — {s.name}</option>
             ))}
           </select>
-          <div style={{ background: "#EAF3DE", color: "#27500A", fontSize: 11, padding: "4px 10px", borderRadius: 20, display: "flex", alignItems: "center", gap: 5 }}>
-            <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#3B6D11", animation: "pulse 1.5s infinite" }} />
-            Live
+          <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+            <Icon name="calendar" size={14} style={{ position: "absolute", left: 10, color: "#9A9893", pointerEvents: "none" }} />
+            <input
+              type="date"
+              value={selectedDate}
+              max={todayStr}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              style={{
+                fontSize: 13, padding: "7px 10px 7px 32px", borderRadius: 8, border: "1px solid #E5E3DD",
+                background: "#fff", color: "#1A1A1A", cursor: "pointer",
+              }}
+            />
           </div>
+          {!isToday && (
+            <button onClick={() => setSelectedDate(todayStr)} style={{ ...ghostBtn, margin: 0, padding: "7px 10px", whiteSpace: "nowrap", border: "1px solid #E5E3DD", borderRadius: 8 }}>
+              Back to today
+            </button>
+          )}
+          {isToday && (
+            <div style={{ background: "#EAF3DE", color: "#27500A", fontSize: 11, padding: "4px 10px", borderRadius: 20, display: "flex", alignItems: "center", gap: 5 }}>
+              <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#3B6D11", animation: "pulse 1.5s infinite" }} />
+              Live
+            </div>
+          )}
         </div>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4,minmax(0,1fr))", gap: 10, marginBottom: 16 }}>
-        <Metric label="On site now" value={onSite} />
-        <Metric label="Total workers today" value={roster.length} />
-        <Metric label="Hours billed today" value={fmtHrs(totalHoursToday)} />
+        <Metric label={isToday ? "On site now" : "Still clocked in (no checkout)"} value={onSite} />
+        <Metric label="Total workers" value={roster.length} />
+        <Metric label="Hours billed" value={fmtHrs(totalHoursToday)} />
         <Metric label="Flags" value={flagged.length} danger={flagged.length > 0} />
       </div>
 
-      <SectionHead>Live roster</SectionHead>
+      <SectionHead>{isToday ? "Live roster" : "Roster for this day"}</SectionHead>
       <div style={card}>
         <div style={{ ...rosterRow, ...rowHeader }}>
-          <div></div><div>Worker</div><div>Status</div><div>Clock in</div><div>Clock out</div><div>Hours today</div><div>Flag</div>
+          <div></div><div>Worker</div><div>Status</div><div>Clock in</div><div>Clock out</div><div>Hours</div><div>Flag</div>
         </div>
         {loading && <div style={{ padding: "14px 16px", fontSize: 12, color: "#9A9893" }}>Loading roster...</div>}
         {!loading && roster.length === 0 && (
-          <div style={{ padding: "14px 16px", fontSize: 12, color: "#9A9893" }}>No punches yet today.</div>
+          <div style={{ padding: "14px 16px", fontSize: 12, color: "#9A9893" }}>No punches on this day.</div>
         )}
         {roster.map((w) => (
           <div key={w.id} style={rosterRow}>
@@ -783,7 +826,7 @@ function Dashboard({ sites }) {
             </div>
             <div style={{ fontSize: 13 }}>{w.clockIn ? fmtTime(w.clockIn) : "—"}</div>
             <div style={{ fontSize: 13, color: w.clockOut ? "#1A1A1A" : "#B5B3AD" }}>{w.clockOut ? fmtTime(w.clockOut) : "—"}</div>
-            <div style={{ fontSize: 13 }}>{fmtHrs(w.totalMs)} hrs</div>
+            <div style={{ fontSize: 13 }}>{w.missingClockOut ? "—" : `${fmtHrs(w.totalMs)} hrs`}</div>
             <div>
               {w.flag === "geofence" && (
                 <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 12, background: "#FCEBEB", color: "#791F1F", display: "inline-flex", alignItems: "center", gap: 4 }}>
@@ -795,7 +838,12 @@ function Dashboard({ sites }) {
                   <Icon name="pinOff" size={11} />Off-site GPS
                 </span>
               )}
-              {!w.flag && <span style={{ fontSize: 12, color: "#D8D6CF" }}>—</span>}
+              {w.missingClockOut && (
+                <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 12, background: "#FAEEDA", color: "#633806", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  <Icon name="alert" size={11} />No clock-out
+                </span>
+              )}
+              {!w.flag && !w.missingClockOut && <span style={{ fontSize: 12, color: "#D8D6CF" }}>—</span>}
             </div>
           </div>
         ))}
@@ -822,20 +870,19 @@ function Dashboard({ sites }) {
         ))}
       </div>
 
-      <SectionHead>Hours summary (today)</SectionHead>
+      <SectionHead>Hours summary</SectionHead>
       <div style={card}>
         <div style={{ ...hoursRow, ...rowHeader }}>
-          <div>Worker</div><div>Today</div><div>This week</div><div>Progress</div>
+          <div>Worker</div><div>Hours</div><div>Of 8-hr day</div>
         </div>
         {roster.length === 0 && <div style={{ padding: "14px 16px", fontSize: 12, color: "#9A9893" }}>No data yet.</div>}
         {roster.map((w) => {
-          const today = w.totalMs / 3600000;
-          const pct = Math.min(100, Math.round((today / 8) * 100));
+          const hrs = w.totalMs / 3600000;
+          const pct = Math.min(100, Math.round((hrs / 8) * 100));
           return (
             <div key={w.id} style={hoursRow}>
               <div style={{ fontSize: 13 }}>{w.name}</div>
-              <div style={{ fontSize: 13 }}>{today.toFixed(1)} hrs</div>
-              <div style={{ fontSize: 13, color: "#9A9893" }}>—</div>
+              <div style={{ fontSize: 13 }}>{w.missingClockOut ? "—" : `${hrs.toFixed(1)} hrs`}</div>
               <div>
                 <div style={{ width: 60, height: 5, borderRadius: 3, background: "#F1EFE8", display: "inline-block" }}>
                   <div style={{ width: pct + "%", height: 5, borderRadius: 3, background: "#1D9E75" }} />
@@ -1075,6 +1122,6 @@ const hr = { border: "none", borderTop: "0.5px solid #F0EEE8", margin: "10px 0" 
 const topbar = { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, paddingTop: 4 };
 const card = { background: "#fff", border: "1px solid #E5E3DD", borderRadius: 12, marginBottom: 16, overflow: "hidden" };
 const rosterRow = { display: "grid", gridTemplateColumns: "32px 1.6fr 90px 80px 80px 90px 130px", alignItems: "center", gap: 10, padding: "10px 14px", borderBottom: "0.5px solid #F0EEE8" };
-const hoursRow = { display: "grid", gridTemplateColumns: "1.6fr 90px 90px 90px", alignItems: "center", gap: 10, padding: "9px 14px", borderBottom: "0.5px solid #F0EEE8" };
+const hoursRow = { display: "grid", gridTemplateColumns: "1.6fr 90px 90px", alignItems: "center", gap: 10, padding: "9px 14px", borderBottom: "0.5px solid #F0EEE8" };
 const rowHeader = { background: "#FAFAF8", fontSize: 11, color: "#9A9893", fontWeight: 600, borderBottom: "0.5px solid #E5E3DD" };
 const workerRow = { display: "grid", gridTemplateColumns: "32px 1.6fr 1fr 100px", alignItems: "center", gap: 10, padding: "10px 14px", borderBottom: "0.5px solid #F0EEE8" };
