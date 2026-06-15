@@ -45,6 +45,177 @@ function setDeviceLock(siteId, workerId, workerName) {
   } catch {}
 }
 
+// ---------- LANGUAGE / TRANSLATIONS ----------
+// Simple dictionary-based i18n for the worker-facing punch screens.
+// Preference is stored in localStorage per device, defaulting to English.
+const LANG_KEY = "xora_lang";
+function getStoredLang() {
+  try {
+    const v = localStorage.getItem(LANG_KEY);
+    return v === "es" ? "es" : "en";
+  } catch {
+    return "en";
+  }
+}
+function setStoredLang(lang) {
+  try { localStorage.setItem(LANG_KEY, lang); } catch {}
+}
+
+const STRINGS = {
+  en: {
+    qrScanned: "QR code scanned",
+    signIn: "Sign in",
+    demoHint: "Demo: Marcus Johnson / 1234",
+    fullName: "Full name",
+    pin: "PIN",
+    checking: "Checking...",
+    continue: "Continue",
+    firstTime: "First time here? Create account",
+    createAccount: "Create account",
+    takesSeconds: "Takes about 30 seconds",
+    company: "Company",
+    phoneNumber: "Phone number",
+    createPin: "Create a 4-digit PIN",
+    creating: "Creating...",
+    createAndClockIn: "Create & clock in",
+    back: "Back",
+    nameAndPinRequired: "Name and PIN are required.",
+    pinNotRecognized: "Name + PIN not recognized. Try Marcus Johnson / 1234 for demo, or create an account.",
+    couldntCreateAccount: "Couldn't create your account. Try again.",
+    deviceLockedOther: (name) => `This device was already used to sign in ${name} at this jobsite today. Each device can only sign in one worker per jobsite per day. Ask ${name} to use their own device, or have them sign out first.`,
+    deviceLockedSignup: (name) => `This device was already used to sign in ${name} at this jobsite today. Each device can only sign in one worker per jobsite per day. Please use your own device.`,
+    couldntSaveClockIn: (msg) => `Couldn't save your clock-in: ${msg}`,
+    signToConfirm: "Sign to confirm",
+    checkingInForDay: "You're checking in for the day",
+    worker: "Worker",
+    clockIn: "Clock in",
+    clockedIn: "Clocked in",
+    clockOut: "Clock out",
+    clockedOut: "Clocked out",
+    totalHours: "Total hours",
+    submitAndCheckIn: "Submit & check in",
+    thankYouCheckedIn: "Thank you, you're checked in",
+    rescanReminder: 'Rescan this code and tap "Clock out" at the end of your day.',
+    viewStatus: "View status",
+    onSiteSince: "On site since",
+    timeOnSiteToday: "time on site today",
+    geoFlagWarning: (ft) => `You're ${ft.toLocaleString()} ft from the jobsite. This will be flagged unless you clock out.`,
+    leftHealthyUninjured: "Left healthy and uninjured",
+    submitting: "Saving...",
+    submitAndClockOut: "Submit & clock out",
+    thankYouCheckedOut: "Thank you, you're checked out",
+    seeYouTomorrow: (hrs) => `Total: ${hrs} hrs · See you tomorrow`,
+    done: "Done",
+    loading: "Loading...",
+    gpsAcquiring: "GPS acquiring...",
+    gpsLocked: (acc) => `GPS locked${acc ? ` (±${acc}m)` : ""}`,
+    gpsUnavailable: "GPS unavailable — punch logged without location",
+    qrCodeScanned: "QR code scanned",
+    // Legal waiver
+    waiverCheckboxLabel: "I have read and agree to the statement below",
+    waiverLinkText: "View full statement",
+    waiverRequired: "You must agree to the statement above before submitting your signature.",
+    waiverModalTitle: "Daily Acknowledgment",
+    waiverModalClose: "Close",
+    languageToggle: "Español",
+  },
+  es: {
+    qrScanned: "Código QR escaneado",
+    signIn: "Iniciar sesión",
+    demoHint: "Demo: Marcus Johnson / 1234",
+    fullName: "Nombre completo",
+    pin: "PIN",
+    checking: "Verificando...",
+    continue: "Continuar",
+    firstTime: "¿Primera vez aquí? Crear cuenta",
+    createAccount: "Crear cuenta",
+    takesSeconds: "Toma unos 30 segundos",
+    company: "Empresa",
+    phoneNumber: "Número de teléfono",
+    createPin: "Crea un PIN de 4 dígitos",
+    creating: "Creando...",
+    createAndClockIn: "Crear y registrar entrada",
+    back: "Atrás",
+    nameAndPinRequired: "El nombre y el PIN son obligatorios.",
+    pinNotRecognized: "Nombre + PIN no reconocido. Prueba Marcus Johnson / 1234 para la demo, o crea una cuenta.",
+    couldntCreateAccount: "No se pudo crear tu cuenta. Inténtalo de nuevo.",
+    deviceLockedOther: (name) => `Este dispositivo ya se usó hoy para registrar la entrada de ${name} en este sitio. Cada dispositivo solo puede registrar a un trabajador por sitio por día. Pide a ${name} que use su propio dispositivo, o que registre su salida primero.`,
+    deviceLockedSignup: (name) => `Este dispositivo ya se usó hoy para registrar la entrada de ${name} en este sitio. Cada dispositivo solo puede registrar a un trabajador por sitio por día. Por favor usa tu propio dispositivo.`,
+    couldntSaveClockIn: (msg) => `No se pudo guardar tu entrada: ${msg}`,
+    signToConfirm: "Firma para confirmar",
+    checkingInForDay: "Estás registrando tu entrada del día",
+    worker: "Trabajador",
+    clockIn: "Entrada",
+    clockedIn: "Entrada registrada",
+    clockOut: "Salida",
+    clockedOut: "Salida registrada",
+    totalHours: "Horas totales",
+    submitAndCheckIn: "Enviar y registrar entrada",
+    thankYouCheckedIn: "Gracias, tu entrada está registrada",
+    rescanReminder: 'Vuelve a escanear este código y presiona "Salida" al final de tu día.',
+    viewStatus: "Ver estado",
+    onSiteSince: "En el sitio desde",
+    timeOnSiteToday: "tiempo en el sitio hoy",
+    geoFlagWarning: (ft) => `Estás a ${ft.toLocaleString()} pies del sitio de trabajo. Esto se marcará como alerta a menos que registres tu salida.`,
+    leftHealthyUninjured: "Salí en buen estado de salud y sin lesiones",
+    submitting: "Guardando...",
+    submitAndClockOut: "Enviar y registrar salida",
+    thankYouCheckedOut: "Gracias, tu salida está registrada",
+    seeYouTomorrow: (hrs) => `Total: ${hrs} hrs · Nos vemos mañana`,
+    done: "Listo",
+    loading: "Cargando...",
+    gpsAcquiring: "Obteniendo GPS...",
+    gpsLocked: (acc) => `GPS activo${acc ? ` (±${acc}m)` : ""}`,
+    gpsUnavailable: "GPS no disponible — registro guardado sin ubicación",
+    qrCodeScanned: "Código QR escaneado",
+    // Legal waiver
+    waiverCheckboxLabel: "He leído y acepto la siguiente declaración",
+    waiverLinkText: "Ver declaración completa",
+    waiverRequired: "Debes aceptar la declaración anterior antes de enviar tu firma.",
+    waiverModalTitle: "Reconocimiento diario",
+    waiverModalClose: "Cerrar",
+    languageToggle: "English",
+  },
+};
+
+// Full legal waiver text shown for both clock-in and clock-out signatures.
+const WAIVER_TEXT = {
+  en: {
+    clockIn: [
+      "By signing below, I acknowledge the following:",
+      "I am physically present and beginning my workday at this jobsite. All tools, equipment, and materials assigned to me or located in my work area are, to the best of my knowledge, present and in the same condition as at the end of the previous workday.",
+      "I am beginning my shift in good health, free of any injury, and fit to perform my assigned duties.",
+      "I understand that this signature, together with the timestamp and GPS location recorded at the time of signing, constitutes an official record of my attendance at this jobsite for Xinos Construction.",
+      "I understand that providing false information, including signing in on behalf of another worker or misrepresenting my location, may result in disciplinary action.",
+    ],
+    clockOut: [
+      "By signing below, I acknowledge the following:",
+      "I am leaving this jobsite in good health and free of any injury or incident that occurred during my shift. If any injury, incident, or near-miss occurred during my shift, I have reported it to my supervisor prior to signing this acknowledgment.",
+      "To the best of my knowledge, all tools, equipment, and materials assigned to me or located in my work area are in the same condition and location as they were at the start of my workday, except as otherwise reported to my supervisor.",
+      "I understand that this signature, together with the timestamp and GPS location recorded at the time of signing, constitutes an official record of my attendance and departure from this jobsite.",
+      "I understand that Xinos Construction is not liable for any injury, loss, or damage that is not reported through the proper channels prior to or at the time of signing this acknowledgment.",
+      "By signing this line, I confirm that the statements above are true and accurate, and I agree to the terms described in this acknowledgment.",
+    ],
+  },
+  es: {
+    clockIn: [
+      "Al firmar a continuación, reconozco lo siguiente:",
+      "Estoy físicamente presente y comenzando mi jornada laboral en este sitio de trabajo. Todas las herramientas, equipos y materiales asignados a mí o ubicados en mi área de trabajo están, según mi conocimiento, presentes y en la misma condición que al final del día laboral anterior.",
+      "Estoy comenzando mi turno en buen estado de salud, sin lesiones, y en condiciones de realizar mis tareas asignadas.",
+      "Entiendo que esta firma, junto con la fecha, hora y ubicación GPS registradas al momento de firmar, constituye un registro oficial de mi asistencia en este sitio de trabajo para Xinos Construction.",
+      "Entiendo que proporcionar información falsa, incluyendo registrar la entrada en nombre de otro trabajador o tergiversar mi ubicación, puede resultar en acción disciplinaria.",
+    ],
+    clockOut: [
+      "Al firmar a continuación, reconozco lo siguiente:",
+      "Estoy saliendo de este sitio de trabajo en buen estado de salud y sin ninguna lesión o incidente ocurrido durante mi turno. Si ocurrió alguna lesión, incidente o casi accidente durante mi turno, lo he reportado a mi supervisor antes de firmar este reconocimiento.",
+      "Según mi conocimiento, todas las herramientas, equipos y materiales asignados a mí o ubicados en mi área de trabajo están en la misma condición y ubicación en que estaban al inicio de mi jornada laboral, salvo lo que haya sido reportado a mi supervisor.",
+      "Entiendo que esta firma, junto con la fecha, hora y ubicación GPS registradas al momento de firmar, constituye un registro oficial de mi asistencia y salida de este sitio de trabajo.",
+      "Entiendo que Xinos Construction no es responsable de ninguna lesión, pérdida o daño que no haya sido reportado a través de los canales apropiados antes de o al momento de firmar este reconocimiento.",
+      "Al firmar esta línea, confirmo que las declaraciones anteriores son verdaderas y precisas, y acepto los términos descritos en este reconocimiento.",
+    ],
+  },
+};
+
 
 // distance in feet between two lat/lng points (haversine)
 function distFeet(lat1, lng1, lat2, lng2) {
@@ -84,6 +255,7 @@ const Icon = ({ name, size = 16, style }) => {
     users: "M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75",
     clock: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM12 6v6l4 2",
     x: "M18 6 6 18M6 6l12 12",
+    globe: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM2 12h20M12 2a15 15 0 0 1 4 10 15 15 0 0 1-4 10 15 15 0 0 1-4-10 15 15 0 0 1 4-10z",
     calendar: "M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z",
     download: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3",
     printer: "M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M6 14h12v8H6z",
@@ -212,6 +384,13 @@ const cardBtn = {
 // ============================================================
 function WorkerApp({ onBack, siteId, sites }) {
   const site = sites.find((s) => s.id === siteId) || sites[0] || FALLBACK_SITE;
+  const [lang, setLang] = useState(getStoredLang);
+  const t = STRINGS[lang];
+  function toggleLang() {
+    const next = lang === "en" ? "es" : "en";
+    setLang(next);
+    setStoredLang(next);
+  }
   const [stage, setStage] = useState("loading"); // loading | scan | signup | sign_in | checked_in | clockedin | sign_out | done
   const [worker, setWorker] = useState(null);
   const [pinInput, setPinInput] = useState("");
@@ -320,7 +499,7 @@ function WorkerApp({ onBack, siteId, sites }) {
       .limit(1);
     setBusy(false);
     if (qErr || !data || !data.length) {
-      setError("Name + PIN not recognized. Try Marcus Johnson / 1234 for demo, or create an account.");
+      setError(t.pinNotRecognized);
       return;
     }
     const found = data[0];
@@ -329,7 +508,7 @@ function WorkerApp({ onBack, siteId, sites }) {
     // at this jobsite today, block a different worker from using it.
     const lock = getDeviceLock(site.id);
     if (lock && lock.workerId !== found.id) {
-      setError(`This device was already used to sign in ${lock.workerName} at this jobsite today. Each device can only sign in one worker per jobsite per day. Ask ${lock.workerName} to use their own device, or have them sign out first.`);
+      setError(t.deviceLockedOther(lock.workerName));
       return;
     }
 
@@ -359,7 +538,7 @@ function WorkerApp({ onBack, siteId, sites }) {
       .select()
       .single();
     setBusy(false);
-    if (insErr) { setError("Couldn't save your clock-in: " + insErr.message); return; }
+    if (insErr) { setError(t.couldntSaveClockIn(insErr.message)); return; }
     setDeviceLock(site.id, w.id, w.name);
     setClockInTime(new Date(data.timestamp).getTime());
     setOpenPunchId(data.id);
@@ -378,14 +557,14 @@ function WorkerApp({ onBack, siteId, sites }) {
   }
 
   async function submitSignup() {
-    if (!signupForm.name || !signupForm.pin) { setError("Name and PIN are required."); return; }
+    if (!signupForm.name || !signupForm.pin) { setError(t.nameAndPinRequired); return; }
 
     // Device lock check applies to new accounts too — if this device
     // already signed someone else in at this jobsite today, don't
     // allow creating yet another account from the same device.
     const lock = getDeviceLock(site.id);
     if (lock) {
-      setError(`This device was already used to sign in ${lock.workerName} at this jobsite today. Each device can only sign in one worker per jobsite per day. Please use your own device.`);
+      setError(t.deviceLockedSignup(lock.workerName));
       return;
     }
 
@@ -406,7 +585,7 @@ function WorkerApp({ onBack, siteId, sites }) {
       .single();
     setBusy(false);
     if (insErr) {
-      setError("Couldn't create your account. Try again.");
+      setError(t.couldntCreateAccount);
       return;
     }
     setWorker(data);
@@ -415,15 +594,46 @@ function WorkerApp({ onBack, siteId, sites }) {
 
   const elapsed = clockInTime ? now - clockInTime : 0;
 
+  // Waiver acknowledgment state -- required before either signature can
+  // be submitted. Resets each time a new signature screen is shown.
+  const [waiverChecked, setWaiverChecked] = useState(false);
+  const [waiverModalOpen, setWaiverModalOpen] = useState(null); // null | "clockIn" | "clockOut"
+  const [waiverError, setWaiverError] = useState("");
+
+  useEffect(() => {
+    // Reset acknowledgment whenever we enter a signature stage
+    if (stage === "sign_in" || stage === "sign_out") {
+      setWaiverChecked(false);
+      setWaiverError("");
+    }
+  }, [stage]);
+
+  function requireWaiver(onConfirm) {
+    if (!waiverChecked) {
+      setWaiverError(t.waiverRequired);
+      return;
+    }
+    onConfirm();
+  }
+
   return (
     <Shell onBack={onBack} title="Worker punch">
       <div style={{ display: "flex", justifyContent: "center", padding: "20px 0" }}>
-        <div style={phoneStyle}>
+        <div style={{ width: 320 }}>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+            <button onClick={toggleLang} style={{
+              fontSize: 12, padding: "5px 12px", borderRadius: 8, border: "1px solid #E5E3DD",
+              background: "#fff", color: "#1A1A1A", cursor: "pointer", display: "flex", alignItems: "center", gap: 5,
+            }}>
+              <Icon name="globe" size={13} />{t.languageToggle}
+            </button>
+          </div>
+          <div style={phoneStyle}>
           <div style={statusBar}><span>9:41</span><span>LTE</span></div>
 
           {stage === "loading" && (
             <div style={{ ...screenPad, textAlign: "center", paddingTop: 60 }}>
-              <p style={{ fontSize: 12, color: "#9A9893" }}>Loading...</p>
+              <p style={{ fontSize: 12, color: "#9A9893" }}>{t.loading}</p>
             </div>
           )}
 
@@ -434,59 +644,65 @@ function WorkerApp({ onBack, siteId, sites }) {
               </div>
               <div style={{ textAlign: "center", marginBottom: 18 }}>
                 <Icon name="qr" size={64} style={{ color: "#1D9E75" }} />
-                <p style={{ fontSize: 13, color: "#6B6A66", marginTop: 8 }}>QR code scanned</p>
+                <p style={{ fontSize: 13, color: "#6B6A66", marginTop: 8 }}>{t.qrCodeScanned}</p>
               </div>
-              <p style={{ fontSize: 13, fontWeight: 600, textAlign: "center", margin: "0 0 4px" }}>Sign in</p>
-              <p style={{ fontSize: 11, color: "#9A9893", textAlign: "center", margin: "0 0 14px" }}>Demo: Marcus Johnson / 1234</p>
+              <p style={{ fontSize: 13, fontWeight: 600, textAlign: "center", margin: "0 0 4px" }}>{t.signIn}</p>
+              <p style={{ fontSize: 11, color: "#9A9893", textAlign: "center", margin: "0 0 14px" }}>{t.demoHint}</p>
               <input
                 value={nameInput}
                 onChange={(e) => setNameInput(e.target.value)}
-                type="text" placeholder="Full name"
+                type="text" placeholder={t.fullName}
                 style={{ ...inputStyle, marginBottom: 8 }}
               />
               <input
                 value={pinInput}
                 onChange={(e) => setPinInput(e.target.value.replace(/\D/g, "").slice(0, 4))}
-                type="password" inputMode="numeric" placeholder="PIN"
+                type="password" inputMode="numeric" placeholder={t.pin}
                 style={{ ...inputStyle, textAlign: "center", fontSize: 22, letterSpacing: 6, marginBottom: 10 }}
               />
               {error && <p style={{ fontSize: 11, color: "#A32D2D", margin: "0 0 10px" }}>{error}</p>}
-              <button onClick={tryLogin} disabled={busy} style={submitBtn}>{busy ? "Checking..." : "Continue"}</button>
+              <button onClick={tryLogin} disabled={busy} style={submitBtn}>{busy ? t.checking : t.continue}</button>
               <button onClick={() => { setStage("signup"); setError(""); }} style={ghostBtn}>
-                First time here? Create account
+                {t.firstTime}
               </button>
-              <GpsRow status={gpsStatus} />
+              <GpsRow status={gpsStatus} t={t} />
             </div>
           )}
 
           {stage === "signup" && (
             <div style={screenPad}>
               <div style={{ textAlign: "center", marginBottom: 10 }}><SiteChip site={site} /></div>
-              <p style={{ fontSize: 13, fontWeight: 600, margin: "0 0 2px" }}>Create account</p>
-              <p style={{ fontSize: 11, color: "#9A9893", margin: "0 0 10px" }}>Takes about 30 seconds</p>
-              <input style={inputStyle} placeholder="Full name" value={signupForm.name}
+              <p style={{ fontSize: 13, fontWeight: 600, margin: "0 0 2px" }}>{t.createAccount}</p>
+              <p style={{ fontSize: 11, color: "#9A9893", margin: "0 0 10px" }}>{t.takesSeconds}</p>
+              <input style={inputStyle} placeholder={t.fullName} value={signupForm.name}
                 onChange={(e) => setSignupForm({ ...signupForm, name: e.target.value })} />
-              <input style={inputStyle} placeholder="Company" value={signupForm.company}
+              <input style={inputStyle} placeholder={t.company} value={signupForm.company}
                 onChange={(e) => setSignupForm({ ...signupForm, company: e.target.value })} />
-              <input style={inputStyle} placeholder="Phone number" type="tel" value={signupForm.phone}
+              <input style={inputStyle} placeholder={t.phoneNumber} type="tel" value={signupForm.phone}
                 onChange={(e) => setSignupForm({ ...signupForm, phone: e.target.value })} />
-              <input style={inputStyle} placeholder="Create a 4-digit PIN" type="password" inputMode="numeric"
+              <input style={inputStyle} placeholder={t.createPin} type="password" inputMode="numeric"
                 maxLength={4} value={signupForm.pin}
                 onChange={(e) => setSignupForm({ ...signupForm, pin: e.target.value.replace(/\D/g, "").slice(0, 4) })} />
               {error && <p style={{ fontSize: 11, color: "#A32D2D", margin: "0 0 8px" }}>{error}</p>}
-              <button onClick={submitSignup} disabled={busy} style={submitBtn}>{busy ? "Creating..." : "Create & clock in"}</button>
-              <button onClick={() => setStage("scan")} style={ghostBtn}>Back</button>
+              <button onClick={submitSignup} disabled={busy} style={submitBtn}>{busy ? t.creating : t.createAndClockIn}</button>
+              <button onClick={() => setStage("scan")} style={ghostBtn}>{t.back}</button>
             </div>
           )}
 
           {stage === "sign_in" && worker && (
             <div style={screenPad}>
-              <p style={{ fontSize: 13, fontWeight: 600, margin: "0 0 4px" }}>Sign to confirm</p>
-              <p style={{ fontSize: 11, color: "#9A9893", margin: "0 0 12px" }}>You're checking in for the day</p>
-              <Row label="Worker" value={worker.name} />
-              <Row label="Clock in" value={fmtTime(new Date(clockInTime))} bold />
+              <p style={{ fontSize: 13, fontWeight: 600, margin: "0 0 4px" }}>{t.signToConfirm}</p>
+              <p style={{ fontSize: 11, color: "#9A9893", margin: "0 0 12px" }}>{t.checkingInForDay}</p>
+              <Row label={t.worker} value={worker.name} />
+              <Row label={t.clockIn} value={fmtTime(new Date(clockInTime))} bold />
+              <WaiverCheckbox
+                t={t} checked={waiverChecked}
+                onToggle={() => { setWaiverChecked(!waiverChecked); setWaiverError(""); }}
+                onViewWaiver={() => setWaiverModalOpen("clockIn")}
+              />
+              {waiverError && <p style={{ fontSize: 11, color: "#A32D2D", margin: "0 0 8px" }}>{waiverError}</p>}
               <SignaturePad />
-              <button onClick={() => setStage("checked_in")} style={submitBtn}>Submit &amp; check in</button>
+              <button onClick={() => requireWaiver(() => setStage("checked_in"))} style={submitBtn}>{t.submitAndCheckIn}</button>
             </div>
           )}
 
@@ -495,10 +711,10 @@ function WorkerApp({ onBack, siteId, sites }) {
               <div style={{ width: 48, height: 48, borderRadius: "50%", background: "#EAF3DE", color: "#27500A", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 14px" }}>
                 <Icon name="check" size={24} />
               </div>
-              <p style={{ fontSize: 14, fontWeight: 600, margin: "0 0 4px" }}>Thank you, you're checked in</p>
-              <p style={{ fontSize: 12, color: "#9A9893", margin: 0 }}>Clocked in at {fmtTime(new Date(clockInTime))}</p>
-              <p style={{ fontSize: 12, color: "#9A9893", margin: "12px 0 0" }}>Rescan this code and tap "Clock out" at the end of your day.</p>
-              <button onClick={() => setStage("clockedin")} style={{ ...ghostBtn, marginTop: 20 }}>View status</button>
+              <p style={{ fontSize: 14, fontWeight: 600, margin: "0 0 4px" }}>{t.thankYouCheckedIn}</p>
+              <p style={{ fontSize: 12, color: "#9A9893", margin: 0 }}>{t.clockedIn} {fmtTime(new Date(clockInTime))}</p>
+              <p style={{ fontSize: 12, color: "#9A9893", margin: "12px 0 0" }}>{t.rescanReminder}</p>
+              <button onClick={() => setStage("clockedin")} style={{ ...ghostBtn, marginTop: 20 }}>{t.viewStatus}</button>
             </div>
           )}
 
@@ -510,36 +726,42 @@ function WorkerApp({ onBack, siteId, sites }) {
                   {worker.initials}
                 </div>
                 <p style={{ fontSize: 14, fontWeight: 600, margin: 0, textAlign: "center" }}>{worker.name}</p>
-                <p style={{ fontSize: 11, color: "#9A9893", margin: "2px 0 0" }}>On site since {fmtTime(new Date(clockInTime))}</p>
+                <p style={{ fontSize: 11, color: "#9A9893", margin: "2px 0 0" }}>{t.onSiteSince} {fmtTime(new Date(clockInTime))}</p>
               </div>
               <div style={{ fontSize: 28, fontWeight: 600, textAlign: "center", margin: "12px 0 2px" }}>
                 {Math.floor(elapsed / 3600000)}h {Math.floor((elapsed % 3600000) / 60000)}m
               </div>
-              <p style={{ fontSize: 11, color: "#9A9893", textAlign: "center", margin: "0 0 16px" }}>time on site today</p>
+              <p style={{ fontSize: 11, color: "#9A9893", textAlign: "center", margin: "0 0 16px" }}>{t.timeOnSiteToday}</p>
 
               {geoFlag && (
                 <div style={{ background: "#FCEBEB", color: "#791F1F", borderRadius: 10, padding: "10px 12px", fontSize: 12, marginBottom: 12, display: "flex", gap: 8, alignItems: "flex-start" }}>
                   <Icon name="alert" size={16} style={{ flexShrink: 0, marginTop: 1 }} />
-                  <span>You're {geoFlag.toLocaleString()} ft from the jobsite. This will be flagged unless you clock out.</span>
+                  <span>{t.geoFlagWarning(geoFlag)}</span>
                 </div>
               )}
 
               <hr style={hr} />
               <button onClick={() => setStage("sign_out")} style={{ ...punchBtn, background: "#FCEBEB", color: "#791F1F" }}>
-                <Icon name="logout" size={15} style={{ marginRight: 6, verticalAlign: -2 }} />Clock out
+                <Icon name="logout" size={15} style={{ marginRight: 6, verticalAlign: -2 }} />{t.clockOut}
               </button>
-              <GpsRow status={gpsStatus} accuracy={gps?.accuracy} />
+              <GpsRow status={gpsStatus} accuracy={gps?.accuracy} t={t} />
             </div>
           )}
 
           {stage === "sign_out" && worker && (
             <div style={screenPad}>
-              <p style={{ fontSize: 13, fontWeight: 600, margin: "0 0 4px" }}>Sign to confirm</p>
-              <p style={{ fontSize: 11, color: "#9A9893", margin: "0 0 12px" }}>Left healthy and uninjured</p>
-              <Row label="Clocked in" value={fmtTime(new Date(clockInTime))} />
-              <Row label="Total hours" value={fmtHrs(elapsed) + " hrs"} bold />
+              <p style={{ fontSize: 13, fontWeight: 600, margin: "0 0 4px" }}>{t.signToConfirm}</p>
+              <p style={{ fontSize: 11, color: "#9A9893", margin: "0 0 12px" }}>{t.leftHealthyUninjured}</p>
+              <Row label={t.clockedIn} value={fmtTime(new Date(clockInTime))} />
+              <Row label={t.totalHours} value={fmtHrs(elapsed) + " hrs"} bold />
+              <WaiverCheckbox
+                t={t} checked={waiverChecked}
+                onToggle={() => { setWaiverChecked(!waiverChecked); setWaiverError(""); }}
+                onViewWaiver={() => setWaiverModalOpen("clockOut")}
+              />
+              {waiverError && <p style={{ fontSize: 11, color: "#A32D2D", margin: "0 0 8px" }}>{waiverError}</p>}
               <SignaturePad />
-              <button onClick={doClockOut} disabled={busy} style={submitBtn}>{busy ? "Saving..." : "Submit & clock out"}</button>
+              <button onClick={() => requireWaiver(doClockOut)} disabled={busy} style={submitBtn}>{busy ? t.submitting : t.submitAndClockOut}</button>
             </div>
           )}
 
@@ -548,13 +770,23 @@ function WorkerApp({ onBack, siteId, sites }) {
               <div style={{ width: 48, height: 48, borderRadius: "50%", background: "#EAF3DE", color: "#27500A", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 14px" }}>
                 <Icon name="check" size={24} />
               </div>
-              <p style={{ fontSize: 14, fontWeight: 600, margin: "0 0 4px" }}>Thank you, you're checked out</p>
-              <p style={{ fontSize: 12, color: "#9A9893", margin: 0 }}>Total: {fmtHrs(elapsed)} hrs · See you tomorrow</p>
-              <button onClick={() => { setStage("scan"); setWorker(null); setClockInTime(null); setOpenPunchId(null); setPinInput(""); setGeoFlag(null); }} style={{ ...ghostBtn, marginTop: 20 }}>Done</button>
+              <p style={{ fontSize: 14, fontWeight: 600, margin: "0 0 4px" }}>{t.thankYouCheckedOut}</p>
+              <p style={{ fontSize: 12, color: "#9A9893", margin: 0 }}>{t.seeYouTomorrow(fmtHrs(elapsed))}</p>
+              <button onClick={() => { setStage("scan"); setWorker(null); setClockInTime(null); setOpenPunchId(null); setPinInput(""); setGeoFlag(null); }} style={{ ...ghostBtn, marginTop: 20 }}>{t.done}</button>
             </div>
           )}
+          </div>
         </div>
       </div>
+
+      {waiverModalOpen && (
+        <WaiverModal
+          t={t}
+          lang={lang}
+          type={waiverModalOpen}
+          onClose={() => setWaiverModalOpen(null)}
+        />
+      )}
     </Shell>
   );
 }
@@ -576,13 +808,58 @@ function SiteChip({ site }) {
   );
 }
 
-function GpsRow({ status, accuracy }) {
+// Checkbox + link shown above the signature pad. Must be checked before
+// the signature can be submitted. The link opens the full legal text.
+function WaiverCheckbox({ t, checked, onToggle, onViewWaiver }) {
+  return (
+    <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 10, padding: "8px 10px", background: "#FAFAF8", borderRadius: 8, border: "1px solid #F0EEE8" }}>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={onToggle}
+        style={{ marginTop: 2, width: 14, height: 14, flexShrink: 0, cursor: "pointer" }}
+      />
+      <div style={{ fontSize: 11, color: "#6B6A66", lineHeight: 1.4 }}>
+        <span onClick={onToggle} style={{ cursor: "pointer" }}>{t.waiverCheckboxLabel}</span>
+        {" — "}
+        <span onClick={onViewWaiver} style={{ color: "#0C447C", textDecoration: "underline", cursor: "pointer" }}>
+          {t.waiverLinkText}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// Full-screen modal showing the legal acknowledgment text for either
+// the clock-in or clock-out signature, in the current language.
+function WaiverModal({ t, lang, type, onClose }) {
+  const lines = WAIVER_TEXT[lang][type];
+  return (
+    <div
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100, padding: 20 }}
+      onClick={onClose}
+    >
+      <div
+        style={{ background: "#fff", borderRadius: 14, padding: 24, width: 360, maxWidth: "100%", maxHeight: "80vh", overflowY: "auto" }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <p style={{ fontSize: 15, fontWeight: 600, margin: "0 0 12px" }}>{t.waiverModalTitle}</p>
+        {lines.map((line, i) => (
+          <p key={i} style={{ fontSize: 12, color: "#6B6A66", lineHeight: 1.6, margin: "0 0 10px" }}>{line}</p>
+        ))}
+        <button onClick={onClose} style={{ ...submitBtn, marginTop: 4 }}>{t.waiverModalClose}</button>
+      </div>
+    </div>
+  );
+}
+
+function GpsRow({ status, accuracy, t }) {
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontSize: 11, color: "#9A9893", marginTop: 10 }}>
       <Icon name={status === "denied" ? "pinOff" : "pin"} size={13} />
-      {status === "locating" && "GPS acquiring..."}
-      {status === "locked" && `GPS locked${accuracy ? ` (±${Math.round(accuracy)}m)` : ""}`}
-      {status === "denied" && "GPS unavailable — punch logged without location"}
+      {status === "locating" && t.gpsAcquiring}
+      {status === "locked" && t.gpsLocked(accuracy ? Math.round(accuracy) : null)}
+      {status === "denied" && t.gpsUnavailable}
     </div>
   );
 }
