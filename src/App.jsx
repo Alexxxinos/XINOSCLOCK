@@ -1149,10 +1149,12 @@ function SupervisorApp({ onBack, sites, setSites }) {
           <TabBtn active={tab === "dashboard"} onClick={() => setTab("dashboard")}>Live dashboard</TabBtn>
           <TabBtn active={tab === "qr"} onClick={() => setTab("qr")}>Jobsite QR codes</TabBtn>
           {role === "admin" && <TabBtn active={tab === "workers"} onClick={() => setTab("workers")}>Workers</TabBtn>}
+          {role === "admin" && <TabBtn active={tab === "pms"} onClick={() => setTab("pms")}>Project managers</TabBtn>}
         </div>
         {tab === "dashboard" && <Dashboard sites={pmSites.length ? pmSites : sites} />}
         {tab === "qr" && <QRSection sites={pmSites.length ? pmSites : sites} setSites={setSites} pmId={role === "pm" ? pmUser.id : null} />}
         {tab === "workers" && role === "admin" && <WorkersSection />}
+        {tab === "pms" && role === "admin" && <PMSection sites={sites} />}
       </div>
     </Shell>
   );
@@ -1829,15 +1831,32 @@ function QRSection({ sites, setSites, pmId = null }) {
   const [address, setAddress] = useState("");
   const [foremanName, setForemanName] = useState("");
   const [foremanPhone, setForemanPhone] = useState("");
+  const [pmPin, setPmPin] = useState("");
+  const [pmLookup, setPmLookup] = useState(null); // { id, name } when PIN matches
   const [foremen, setForemen] = useState([]);
+  const [allPms, setAllPms] = useState([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    supabase.from("foremen").select("*").order("name", { ascending: true }).then(({ data, error }) => {
-      if (!error && data) setForemen(data);
+    supabase.from("foremen").select("*").order("name", { ascending: true }).then(({ data }) => {
+      if (data) setForemen(data);
+    });
+    supabase.from("project_managers").select("id, name, pin").order("name", { ascending: true }).then(({ data }) => {
+      if (data) setAllPms(data);
     });
   }, []);
+
+  // When PM PIN field changes, look up matching PM in real time
+  async function handlePmPinChange(val) {
+    const clean = val.replace(/\D/g, "").slice(0, 5);
+    setPmPin(clean);
+    setPmLookup(null);
+    if (clean.length === 5) {
+      const match = allPms.find((p) => p.pin === clean);
+      if (match) setPmLookup({ id: match.id, name: match.name });
+    }
+  }
 
   // When the foreman name matches a known foreman exactly, auto-fill
   // their saved phone number.
@@ -1879,7 +1898,7 @@ function QRSection({ sites, setSites, pmId = null }) {
       foreman: foremanName.trim() || null,
       foreman_phone: foremanPhone.trim() || null,
       created_at: new Date().toISOString(),
-      pm_id: pmId || null,
+      pm_id: pmId || pmLookup?.id || null,
     };
     const { error: insErr } = await supabase.from("sites").insert(newSite);
     setBusy(false);
@@ -1906,6 +1925,8 @@ function QRSection({ sites, setSites, pmId = null }) {
       setAddress("");
       setForemanName("");
       setForemanPhone("");
+      setPmPin("");
+      setPmLookup(null);
     } else {
       setError("Couldn't save the jobsite. Try again.");
     }
@@ -1991,7 +2012,7 @@ function QRSection({ sites, setSites, pmId = null }) {
           <input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Street address, city, state"
             style={{ ...inputStyle, marginBottom: 0, flex: 1 }} onKeyDown={(e) => e.key === "Enter" && addSite()} />
         </div>
-        <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", gap: 8, marginBottom: error ? 8 : 0 }}>
+        <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", gap: 8, marginBottom: 8 }}>
           <input
             value={foremanName}
             onChange={(e) => handleForemanNameChange(e.target.value)}
@@ -2011,10 +2032,34 @@ function QRSection({ sites, setSites, pmId = null }) {
             style={{ ...inputStyle, marginBottom: 0, flex: 1 }}
             onKeyDown={(e) => e.key === "Enter" && addSite()}
           />
-          <button onClick={addSite} disabled={busy} style={{ ...submitBtn, marginTop: 0, width: isMobile ? "100%" : 140 }}>{busy ? "Locating..." : "Create code"}</button>
         </div>
+        {!pmId && (
+          <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", gap: 8, marginBottom: error ? 8 : 0, alignItems: "flex-start" }}>
+            <div style={{ flex: 1, position: "relative" }}>
+              <input
+                value={pmPin}
+                onChange={(e) => handlePmPinChange(e.target.value)}
+                placeholder="PM PIN (5 digits) — optional"
+                inputMode="numeric"
+                style={{ ...inputStyle, marginBottom: 0, width: "100%" }}
+                onKeyDown={(e) => e.key === "Enter" && addSite()}
+              />
+              {pmPin.length === 5 && (
+                <p style={{ fontSize: 11, margin: "4px 0 0", color: pmLookup ? "#085041" : "#A32D2D" }}>
+                  {pmLookup ? `✓ Assigned to ${pmLookup.name}` : "No PM found with that PIN"}
+                </p>
+              )}
+            </div>
+            <button onClick={addSite} disabled={busy} style={{ ...submitBtn, marginTop: 0, width: isMobile ? "100%" : 140 }}>{busy ? "Locating..." : "Create code"}</button>
+          </div>
+        )}
+        {pmId && (
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <button onClick={addSite} disabled={busy} style={{ ...submitBtn, marginTop: 0, width: isMobile ? "100%" : 140 }}>{busy ? "Locating..." : "Create code"}</button>
+          </div>
+        )}
         <p style={{ fontSize: 11, color: "#9A9893", margin: "8px 0 0" }}>
-          Foreman name + phone are remembered — start typing a name you've used before to auto-fill their number.
+          Foreman name + phone are remembered. Enter a PM PIN to link this jobsite to a project manager's account.
         </p>
         {error && <p style={{ fontSize: 11, color: "#A32D2D", margin: "8px 0 0" }}>{error}</p>}
       </div>
@@ -2084,6 +2129,143 @@ function QRSection({ sites, setSites, pmId = null }) {
 }
 
 // ---------- WORKERS SECTION ----------
+// ---------- PM MANAGEMENT SECTION ----------
+function PMSection({ sites }) {
+  const [pms, setPms] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [newName, setNewName] = useState("");
+  const [newPin, setNewPin] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function load() {
+    setLoading(true);
+    const { data } = await supabase
+      .from("project_managers")
+      .select("*")
+      .order("name", { ascending: true });
+    if (data) setPms(data);
+    setLoading(false);
+  }
+
+  async function createPm() {
+    setError(""); setSuccess("");
+    if (!newName.trim()) { setError("Enter a name."); return; }
+    if (!/^\d{5}$/.test(newPin)) { setError("PIN must be exactly 5 digits."); return; }
+    setSaving(true);
+    const { error: insErr } = await supabase
+      .from("project_managers")
+      .insert({ name: newName.trim(), pin: newPin });
+    setSaving(false);
+    if (insErr) {
+      setError(insErr.message.includes("unique") ? "That PIN is already taken — choose a different one." : "Couldn't create PM. Try again.");
+    } else {
+      setSuccess(`${newName.trim()} added with PIN ${newPin}.`);
+      setNewName(""); setNewPin("");
+      load();
+    }
+  }
+
+  async function deletePm(id) {
+    setDeletingId(id);
+    await supabase.from("project_managers").delete().eq("id", id);
+    setDeletingId(null);
+    setConfirmDeleteId(null);
+    setPms(pms.filter((p) => p.id !== id));
+  }
+
+  return (
+    <div>
+      <SectionHead>Add project manager</SectionHead>
+      <div style={{ ...card, padding: "16px", marginBottom: 20 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+          <input
+            value={newName} onChange={(e) => setNewName(e.target.value)}
+            placeholder="Full name"
+            style={{ ...inputStyle, marginBottom: 0, flex: "1 1 160px" }}
+            onKeyDown={(e) => e.key === "Enter" && createPm()}
+          />
+          <input
+            value={newPin} onChange={(e) => setNewPin(e.target.value.replace(/\D/g, "").slice(0, 5))}
+            placeholder="5-digit PIN"
+            inputMode="numeric" type="password"
+            style={{ ...inputStyle, marginBottom: 0, width: 130, textAlign: "center", fontSize: 18, letterSpacing: 4 }}
+            onKeyDown={(e) => e.key === "Enter" && createPm()}
+          />
+          <button onClick={createPm} disabled={saving} style={{ ...submitBtn, marginTop: 0, width: 130 }}>
+            {saving ? "Saving..." : "Add PM"}
+          </button>
+        </div>
+        {error && <p style={{ fontSize: 11, color: "#A32D2D", margin: "4px 0 0" }}>{error}</p>}
+        {success && <p style={{ fontSize: 11, color: "#085041", margin: "4px 0 0" }}>✓ {success}</p>}
+        <p style={{ fontSize: 11, color: "#9A9893", margin: "8px 0 0" }}>
+          PMs log in using their 5-digit PIN and see only the jobsites linked to their account.
+        </p>
+      </div>
+
+      <SectionHead>Active project managers</SectionHead>
+      <div style={card}>
+        {loading && <div style={{ padding: "14px 16px", fontSize: 12, color: "#9A9893" }}>Loading...</div>}
+        {!loading && pms.length === 0 && (
+          <div style={{ padding: "14px 16px", fontSize: 12, color: "#9A9893" }}>No project managers yet.</div>
+        )}
+        {pms.map((pm) => {
+          const pmSites = sites.filter((s) => s.pm_id === pm.id);
+          const confirming = confirmDeleteId === pm.id;
+          return (
+            <div key={pm.id}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 80px auto 36px", alignItems: "center", gap: 12, padding: "12px 14px", borderBottom: "0.5px solid #F0EEE8" }}>
+                <div>
+                  <p style={{ fontSize: 13, fontWeight: 500, margin: "0 0 2px" }}>{pm.name}</p>
+                  <p style={{ fontSize: 11, color: "#9A9893", margin: 0 }}>
+                    {pmSites.length} site{pmSites.length !== 1 ? "s" : ""}{pmSites.length > 0 ? ": " + pmSites.map((s) => s.name).join(", ") : ""}
+                  </p>
+                </div>
+                <div style={{ fontFamily: "monospace", fontSize: 13, color: "#9A9893", textAlign: "center" }}>
+                  {"•".repeat(pm.pin.length)}
+                </div>
+                <div style={{ fontSize: 11, color: "#9A9893", whiteSpace: "nowrap" }}>
+                  PIN: <strong style={{ color: "#1A1A1A" }}>{pm.pin}</strong>
+                </div>
+                <button
+                  onClick={() => setConfirmDeleteId(confirming ? null : pm.id)}
+                  style={{ width: 30, height: 30, borderRadius: 8, border: "1px solid #E5E3DD", background: "#fff", color: "#9A9893", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", padding: 0 }}
+                >
+                  <Icon name="x" size={13} />
+                </button>
+              </div>
+              {confirming && (
+                <div style={{ padding: "10px 14px", background: "#FCEBEB", borderBottom: "0.5px solid #F0EEE8" }}>
+                  <p style={{ fontSize: 12, color: "#791F1F", margin: "0 0 8px" }}>
+                    Remove {pm.name}? Their jobsites will remain but won't be linked to any PM account.
+                  </p>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button onClick={() => deletePm(pm.id)} disabled={deletingId === pm.id}
+                      style={{ padding: "7px 14px", borderRadius: 8, border: "none", background: "#A32D2D", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                      {deletingId === pm.id ? "Removing..." : "Remove PM"}
+                    </button>
+                    <button onClick={() => setConfirmDeleteId(null)}
+                      style={{ padding: "7px 14px", borderRadius: 8, border: "1px solid #E5E3DD", background: "#fff", fontSize: 12, cursor: "pointer" }}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function WorkersSection() {
   const [workers, setWorkers] = useState([]);
   const [loading, setLoading] = useState(true);
