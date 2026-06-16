@@ -286,6 +286,7 @@ const Icon = ({ name, size = 16, style }) => {
     clock: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM12 6v6l4 2",
     x: "M18 6 6 18M6 6l12 12",
     globe: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM2 12h20M12 2a15 15 0 0 1 4 10 15 15 0 0 1-4 10 15 15 0 0 1-4-10 15 15 0 0 1 4-10z",
+    user: "M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
     calendar: "M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z",
     download: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3",
     printer: "M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M6 14h12v8H6z",
@@ -1069,48 +1070,199 @@ function SignaturePad({ onChange }) {
 // ============================================================
 // SUPERVISOR APP
 // ============================================================
-const ADMIN_PASSWORD = "sitemanager"; // demo only — replace with Supabase auth
+const ADMIN_PASSWORD = "sitemanager"; // full admin — sees everything
+const BOSS_PASSWORD  = "xinos2026";    // Tony's boss view — all sites, simplified
 
 function SupervisorApp({ onBack, sites, setSites }) {
-  const [authed, setAuthed] = useState(false);
+  const [role, setRole] = useState(null); // null | "admin" | "boss" | "pm"
+  const [pmUser, setPmUser] = useState(null); // { id, name, pin } when role === "pm"
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
-  const [tab, setTab] = useState("dashboard"); // dashboard | qr
+  const [tab, setTab] = useState("dashboard");
 
-  if (!authed) {
+  async function handleLogin() {
+    setErr("");
+    // Admin — full access
+    if (pw === ADMIN_PASSWORD) { setRole("admin"); return; }
+    // Boss — simplified all-sites view
+    if (pw === BOSS_PASSWORD)  { setRole("boss");  return; }
+    // PM — 5-digit PIN lookup
+    if (/^\d{5}$/.test(pw)) {
+      const { data, error } = await supabase
+        .from("project_managers")
+        .select("*")
+        .eq("pin", pw)
+        .limit(1);
+      if (!error && data && data.length) {
+        setPmUser(data[0]);
+        setRole("pm");
+        return;
+      }
+    }
+    setErr("Incorrect password or PIN.");
+  }
+
+  // Not yet logged in
+  if (!role) {
     return (
       <Shell onBack={onBack} title="Supervisor login">
         <div style={{ maxWidth: 360, margin: "60px auto", padding: "0 24px" }}>
           <div style={{ background: "#fff", border: "1px solid #E5E3DD", borderRadius: 14, padding: 28 }}>
             <Icon name="lock" size={24} style={{ marginBottom: 12 }} />
             <p style={{ fontSize: 15, fontWeight: 600, margin: "0 0 4px" }}>Supervisor access</p>
-            <p style={{ fontSize: 12, color: "#9A9893", margin: "0 0 16px" }}>Demo password: sitemanager</p>
-            <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="Password"
+            <p style={{ fontSize: 12, color: "#9A9893", margin: "0 0 16px" }}>Enter your password or 5-digit PM PIN</p>
+            <input type="password" value={pw} onChange={(e) => setPw(e.target.value)}
+              placeholder="Password or PM PIN"
               style={{ ...inputStyle, marginBottom: 10 }}
-              onKeyDown={(e) => e.key === "Enter" && (pw === ADMIN_PASSWORD ? setAuthed(true) : setErr("Incorrect password"))} />
+              onKeyDown={(e) => e.key === "Enter" && handleLogin()} />
             {err && <p style={{ fontSize: 11, color: "#A32D2D", margin: "0 0 8px" }}>{err}</p>}
-            <button onClick={() => (pw === ADMIN_PASSWORD ? setAuthed(true) : setErr("Incorrect password"))} style={submitBtn}>
-              Sign in
-            </button>
+            <button onClick={handleLogin} style={submitBtn}>Sign in</button>
           </div>
         </div>
       </Shell>
     );
   }
 
+  // Boss view — Tony's simplified all-sites overview
+  if (role === "boss") {
+    return <BossApp onBack={onBack} sites={sites} />;
+  }
+
+  // PM view — filtered to this PM's sites only
+  const pmSites = role === "pm"
+    ? sites.filter((s) => s.pm_id === pmUser?.id)
+    : sites;
+
   return (
-    <Shell onBack={onBack} title="Supervisor dashboard">
+    <Shell onBack={onBack} title={role === "pm" ? `${pmUser.name}'s dashboard` : "Supervisor dashboard"}>
       <div style={{ maxWidth: 980, margin: "0 auto", padding: "0 20px 40px" }}>
-        <div style={{ display: "flex", gap: 8, marginBottom: 16, marginTop: 16, overflowX: "auto", paddingBottom: 2 }}>
+        {role === "pm" && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 16, marginBottom: 4 }}>
+            <div style={{ width: 28, height: 28, borderRadius: "50%", background: "#E6F1FB", color: "#0C447C", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>
+              {pmUser.name.split(" ").map((n) => n[0]).join("").slice(0, 2)}
+            </div>
+            <p style={{ fontSize: 13, fontWeight: 500, margin: 0 }}>{pmUser.name}</p>
+            <span style={{ fontSize: 11, color: "#9A9893" }}>· Project Manager · {pmSites.length} site{pmSites.length !== 1 ? "s" : ""}</span>
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 8, marginBottom: 16, marginTop: 12, overflowX: "auto", paddingBottom: 2 }}>
           <TabBtn active={tab === "dashboard"} onClick={() => setTab("dashboard")}>Live dashboard</TabBtn>
           <TabBtn active={tab === "qr"} onClick={() => setTab("qr")}>Jobsite QR codes</TabBtn>
-          <TabBtn active={tab === "workers"} onClick={() => setTab("workers")}>Workers</TabBtn>
+          {role === "admin" && <TabBtn active={tab === "workers"} onClick={() => setTab("workers")}>Workers</TabBtn>}
         </div>
-        {tab === "dashboard" && <Dashboard sites={sites} />}
-        {tab === "qr" && <QRSection sites={sites} setSites={setSites} />}
-        {tab === "workers" && <WorkersSection />}
+        {tab === "dashboard" && <Dashboard sites={pmSites.length ? pmSites : sites} />}
+        {tab === "qr" && <QRSection sites={pmSites.length ? pmSites : sites} setSites={setSites} pmId={role === "pm" ? pmUser.id : null} />}
+        {tab === "workers" && role === "admin" && <WorkersSection />}
       </div>
     </Shell>
+  );
+}
+
+// ---------- BOSS VIEW (Tony) ----------
+// All jobsites in one grid — live on-site count per site, click to drill in.
+function BossApp({ onBack, sites }) {
+  const [selectedSite, setSelectedSite] = useState(null);
+
+  if (selectedSite) {
+    return (
+      <Shell onBack={() => setSelectedSite(null)} title={`${selectedSite.code} — ${selectedSite.name}`}>
+        <div style={{ maxWidth: 980, margin: "0 auto", padding: "0 20px 40px" }}>
+          <Dashboard sites={[selectedSite]} />
+        </div>
+      </Shell>
+    );
+  }
+
+  return (
+    <Shell onBack={onBack} title="All jobsites">
+      <div style={{ maxWidth: 980, margin: "0 auto", padding: "20px 20px 40px" }}>
+        <p style={{ fontSize: 12, color: "#9A9893", margin: "0 0 20px" }}>
+          {sites.length} active jobsite{sites.length !== 1 ? "s" : ""} · tap any card for live detail
+        </p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 14 }}>
+          {sites.map((s) => <BossSiteCard key={s.id} site={s} onSelect={() => setSelectedSite(s)} />)}
+        </div>
+      </div>
+    </Shell>
+  );
+}
+
+// Card shown in boss view: fetches today's live punch count for one site.
+function BossSiteCard({ site, onSelect }) {
+  const [onSite, setOnSite] = useState("—");
+  const [totalHrs, setTotalHrs] = useState("—");
+
+  useEffect(() => {
+    async function load() {
+      const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
+      const { data } = await supabase
+        .from("punch_events")
+        .select("worker_id, type, timestamp")
+        .eq("site_id", site.id)
+        .gte("timestamp", dayStart.toISOString())
+        .order("timestamp", { ascending: true });
+      if (!data) return;
+
+      // tally who's currently on-site and total ms worked today
+      const byWorker = {};
+      for (const ev of data) {
+        if (!byWorker[ev.worker_id]) byWorker[ev.worker_id] = { open: null, total: 0 };
+        const w = byWorker[ev.worker_id];
+        if (ev.type === "clock_in") { w.open = new Date(ev.timestamp).getTime(); }
+        else if (ev.type === "clock_out" && w.open) {
+          w.total += new Date(ev.timestamp).getTime() - w.open;
+          w.open = null;
+        }
+      }
+      const now = Date.now();
+      let onSiteCount = 0;
+      let totalMs = 0;
+      for (const w of Object.values(byWorker)) {
+        if (w.open) { onSiteCount++; totalMs += now - w.open; }
+        totalMs += w.total;
+      }
+      setOnSite(onSiteCount);
+      setTotalHrs((totalMs / 3600000).toFixed(1));
+    }
+    load();
+    const t = setInterval(load, 30000);
+    return () => clearInterval(t);
+  }, [site.id]);
+
+  return (
+    <div onClick={onSelect} style={{
+      background: "#fff", border: "1px solid #E5E3DD", borderRadius: 14, padding: 18,
+      cursor: "pointer", transition: "box-shadow 0.15s",
+    }}
+      onMouseEnter={(e) => e.currentTarget.style.boxShadow = "0 4px 16px rgba(0,0,0,0.08)"}
+      onMouseLeave={(e) => e.currentTarget.style.boxShadow = "none"}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+        <div>
+          <p style={{ fontSize: 13, fontWeight: 600, margin: "0 0 2px" }}>{site.code}</p>
+          <p style={{ fontSize: 11, color: "#6B6A66", margin: 0 }}>{site.name}</p>
+        </div>
+        <div style={{ background: "#EAF3DE", color: "#27500A", fontSize: 10, padding: "3px 8px", borderRadius: 20, display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}>
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#3B6D11" }} />Live
+        </div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+        <div style={{ background: "#F6F5F2", borderRadius: 8, padding: "10px 12px" }}>
+          <p style={{ fontSize: 20, fontWeight: 700, margin: "0 0 2px", color: "#1A1A1A" }}>{onSite}</p>
+          <p style={{ fontSize: 11, color: "#9A9893", margin: 0 }}>On site now</p>
+        </div>
+        <div style={{ background: "#F6F5F2", borderRadius: 8, padding: "10px 12px" }}>
+          <p style={{ fontSize: 20, fontWeight: 700, margin: "0 0 2px", color: "#1A1A1A" }}>{totalHrs}</p>
+          <p style={{ fontSize: 11, color: "#9A9893", margin: 0 }}>Hours today</p>
+        </div>
+      </div>
+      {site.foreman && (
+        <p style={{ fontSize: 11, color: "#9A9893", margin: "10px 0 0" }}>
+          <Icon name="user" size={11} style={{ verticalAlign: -1, marginRight: 4 }} />
+          {site.foreman}{site.foreman_phone ? ` · ${site.foreman_phone}` : ""}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -1671,7 +1823,7 @@ function SectionHead({ children }) {
 }
 
 // ---------- QR SECTION ----------
-function QRSection({ sites, setSites }) {
+function QRSection({ sites, setSites, pmId = null }) {
   const isMobile = useIsMobile();
   const [name, setName] = useState("");
   const [address, setAddress] = useState("");
@@ -1727,6 +1879,7 @@ function QRSection({ sites, setSites }) {
       foreman: foremanName.trim() || null,
       foreman_phone: foremanPhone.trim() || null,
       created_at: new Date().toISOString(),
+      pm_id: pmId || null,
     };
     const { error: insErr } = await supabase.from("sites").insert(newSite);
     setBusy(false);
