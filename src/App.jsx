@@ -575,7 +575,13 @@ function WorkerApp({ onBack, siteId, sites }) {
   // GPS coordinates to attach to a punch, with geofence flag check
   function currentGpsPayload() {
     const g = gpsRef.current;
-    if (!g) return { lat: null, lng: null, gps_accuracy: null, flagged: false, flag_reason: null };
+    // GPS denied or unavailable -- flag it so the supervisor can see
+    // that this punch's location was not verified.
+    if (!g) return {
+      lat: null, lng: null, gps_accuracy: null,
+      flagged: gpsStatusRef.current === "denied",
+      flag_reason: gpsStatusRef.current === "denied" ? "Location permission denied — punch not GPS verified" : null,
+    };
     const d = distFeet(site.lat, site.lng, g.lat, g.lng);
     const flagged = d > GEOFENCE_RADIUS_FT;
     return {
@@ -1199,7 +1205,12 @@ function Dashboard({ sites }) {
         if (ev.type === "clock_in") {
           openClockIn = ev;
           if (!firstClockIn) firstClockIn = ev;
-          if (ev.flagged) { activeFlag = "gps_in"; activeFlagLoc = ev; }
+          if (ev.flagged) {
+            // Distinguish "no GPS" from "off-site" so we can show different badges
+            const isNoGps = ev.flag_reason && ev.flag_reason.toLowerCase().includes("permission denied");
+            activeFlag = isNoGps ? "no_gps" : "gps_in";
+            activeFlagLoc = ev;
+          }
         } else if (ev.type === "clock_out" && openClockIn) {
           totalMs += t - new Date(openClockIn.timestamp).getTime();
           openClockIn = null;
@@ -1218,7 +1229,8 @@ function Dashboard({ sites }) {
         }
         const latest = events[events.length - 1];
         if (latest.flagged && latest.type === "clock_in") {
-          activeFlag = "geofence";
+          const isNoGps = latest.flag_reason && latest.flag_reason.toLowerCase().includes("permission denied");
+          activeFlag = isNoGps ? "no_gps" : "geofence";
           activeFlagLoc = latest;
         }
       }
@@ -1539,6 +1551,10 @@ function Dashboard({ sites }) {
             <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 12, background: "#FCEBEB", color: "#791F1F", display: "inline-flex", alignItems: "center", gap: 4 }}>
               <Icon name="pinOff" size={11} />Off-site GPS
             </span>
+          ) : w.flag === "no_gps" ? (
+            <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 12, background: "#FFF4E0", color: "#7A4D00", display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <Icon name="pinOff" size={11} />No GPS
+            </span>
           ) : w.missingClockOut ? (
             <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 12, background: "#FAEEDA", color: "#633806", display: "inline-flex", alignItems: "center", gap: 4 }}>
               <Icon name="alert" size={11} />No clock-out
@@ -1600,8 +1616,8 @@ function Dashboard({ sites }) {
         {flagged.length === 0 && <p style={{ fontSize: 12, color: "#9A9893", margin: 0 }}>No active flags.</p>}
         {flagged.map((w) => (
           <div key={w.id} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "8px 0", borderBottom: "0.5px solid #F0EEE8" }}>
-            <div style={{ width: 28, height: 28, borderRadius: 8, background: "#FCEBEB", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-              <Icon name="alert" size={14} style={{ color: "#A32D2D" }} />
+            <div style={{ width: 28, height: 28, borderRadius: 8, background: w.flag === "no_gps" ? "#FFF4E0" : "#FCEBEB", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <Icon name="alert" size={14} style={{ color: w.flag === "no_gps" ? "#7A4D00" : "#A32D2D" }} />
             </div>
             <div>
               <p style={{ fontSize: 12, margin: "0 0 2px" }}>
